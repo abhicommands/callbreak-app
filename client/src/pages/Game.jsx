@@ -1,4 +1,3 @@
-// src/Game.jsx
 import React, { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -21,6 +20,8 @@ export default function Game() {
   const [summary, setSummary] = useState(null);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
+  const [formErrors, setFormErrors] = useState({}); // For inline errors instead of alerts
+  const [cancelledHighBids, setCancelledHighBids] = useState({}); // Locally hide cancelled side-games
 
   // local inputs (string while typing)
   const [bidInputs, setBidInputs] = useState({});
@@ -34,46 +35,56 @@ export default function Game() {
   const [selectedBidder, setSelectedBidder] = useState("");
   const [highStakeText, setHighStakeText] = useState("3"); // string while typing
 
-  async function refresh() {
+  async function refresh(attempts = 3) {
     setErr("");
-    const [g, s] = await Promise.all([getGame(gameId), getSummary(gameId)]);
-    setGame(g);
-    setSummary(s);
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const [g, s] = await Promise.all([getGame(gameId), getSummary(gameId)]);
+        setGame(g);
+        setSummary(s);
 
-    // seed inputs from server state
-    const seedB = {},
-      seedA = {};
-    for (let r = 1; r <= 5; r++) {
-      const rd = g.roundData?.[r] || {};
-      seedB[r] = {};
-      seedA[r] = {};
-      (g.players || []).forEach((pl) => {
-        const b = rd.bids?.[pl.id];
-        const a = rd.actuals?.[pl.id];
-        seedB[r][pl.id] = b == null ? "" : String(b);
-        seedA[r][pl.id] = a == null ? "" : String(a);
-      });
-    }
-    setBidInputs(seedB);
-    setActualInputs(seedA);
+        // seed inputs from server state
+        const seedB = {},
+          seedA = {};
+        for (let r = 1; r <= 5; r++) {
+          const rd = g.roundData?.[r] || {};
+          seedB[r] = {};
+          seedA[r] = {};
+          (g.players || []).forEach((pl) => {
+            const b = rd.bids?.[pl.id];
+            const a = rd.actuals?.[pl.id];
+            seedB[r][pl.id] = b == null ? "" : String(b);
+            seedA[r][pl.id] = a == null ? "" : String(a);
+          });
+        }
+        setBidInputs(seedB);
+        setActualInputs(seedA);
 
-    // default edit states: closed; you can open via "Edit ..." buttons
-    const eb = {},
-      ea = {};
-    for (let r = 1; r <= 5; r++) {
-      const rd = g.roundData?.[r] || {};
-      eb[r] = rd.status == null; // open if nothing set yet
-      ea[r] = rd.status === "BIDS_SET"; // open if awaiting actuals
-    }
-    setEditBids(eb);
-    setEditActuals(ea);
+        // default edit states: closed; you can open via "Edit ..." buttons
+        const eb = {},
+          ea = {};
+        for (let r = 1; r <= 5; r++) {
+          const rd = g.roundData?.[r] || {};
+          eb[r] = rd.status == null; // open if nothing set yet
+          ea[r] = rd.status === "BIDS_SET"; // open if awaiting actuals
+        }
+        setEditBids(eb);
+        setEditActuals(ea);
 
-    if (g.highBid?.active && Array.isArray(g.highBid.bidderIds)) {
-      setSelectedBidder(
-        g.highBid.bidderIds.length === 1 ? g.highBid.bidderIds[0] : ""
-      );
-    } else {
-      setSelectedBidder("");
+        // Reset cancelledHighBids to ensure panel shows if highBid is active
+        setCancelledHighBids({});
+
+        if (g.highBid?.active && Array.isArray(g.highBid.bidderIds)) {
+          setSelectedBidder(
+            g.highBid.bidderIds.length === 1 ? g.highBid.bidderIds[0] : ""
+          );
+        } else {
+          setSelectedBidder("");
+        }
+        return; // Success
+      } catch (e) {
+        if (i === attempts - 1) setErr(e.message || "Failed to load game data");
+      }
     }
   }
 
@@ -108,15 +119,19 @@ export default function Game() {
     [rounds]
   );
 
-  // ---- Set bids (all 4 at once, 1–8; 8 triggers high-bid) ----
+  // ---- Set bids (all 4 at once, 1–13; >=8 triggers high-bid) ----
   const setRoundBids = async (round) => {
     if (!isAdmin) return;
+    setFormErrors((p) => ({ ...p, [round]: null })); // Clear previous errors
     const bids = {};
     for (const p of players) {
       const raw = bidInputs?.[round]?.[p.id] ?? "";
       const v = Number(raw);
-      if (!Number.isFinite(v) || v < 1 || v > 8) {
-        alert("Enter valid bids (1–8) for all players.");
+      if (!Number.isFinite(v) || v < 1 || v > 13 || !Number.isInteger(v)) {
+        setFormErrors((p) => ({
+          ...p,
+          [round]: "Enter valid integer bids (1–13) for all players.",
+        }));
         return;
       }
       bids[p.id] = v;
@@ -128,15 +143,20 @@ export default function Game() {
       setEditBids((prev) => ({ ...prev, [round]: false }));
     } catch (e) {
       if (e.status === 409) {
-        // backend should include { highBidTriggered: true, bidderIds: [...] }
-        alert(
-          e?.data?.message ||
+        setFormErrors((p) => ({
+          ...p,
+          [round]:
+            e?.data?.message ||
             e?.data?.error ||
-            "High bid triggered. Resolve the side game, then re-enter bids < 8."
-        );
-        await refresh(); // show high-bid panel if backend activated it
+            "High bid triggered! Resolve the side game below, or cancel to re-enter bids.",
+        }));
+        setCancelledHighBids((p) => ({ ...p, [round]: false })); // Ensure panel shows
+        await refresh(); // Show high-bid panel
       } else {
-        alert(e.message || "Failed to set bids");
+        setFormErrors((p) => ({
+          ...p,
+          [round]: e.message || "Failed to set bids",
+        }));
       }
     } finally {
       setSaving(false);
@@ -146,20 +166,24 @@ export default function Game() {
   // ---- Set actuals (must sum to 13) ----
   const setRoundActuals = async (round) => {
     if (!isAdmin) return;
+    setFormErrors((p) => ({ ...p, [round]: null })); // Clear previous errors
     const actuals = {};
     let sum = 0;
     for (const p of players) {
       const raw = actualInputs?.[round]?.[p.id] ?? "";
       const v = Number(raw);
-      if (!Number.isFinite(v) || v < 0 || v > 13) {
-        alert("Enter valid actuals (0..13) for all players.");
+      if (!Number.isFinite(v) || v < 0 || v > 13 || !Number.isInteger(v)) {
+        setFormErrors((p) => ({
+          ...p,
+          [round]: "Enter valid integer actuals (0–13) for all players.",
+        }));
         return;
       }
       sum += v;
       actuals[p.id] = v;
     }
     if (sum !== 13) {
-      alert("Actuals must sum to 13.");
+      setFormErrors((p) => ({ ...p, [round]: "Actuals must sum to 13." }));
       return;
     }
     try {
@@ -168,7 +192,10 @@ export default function Game() {
       await refresh();
       setEditActuals((prev) => ({ ...prev, [round]: false }));
     } catch (e) {
-      alert(e.message || "Failed to set actuals");
+      setFormErrors((p) => ({
+        ...p,
+        [round]: e.message || "Failed to set actuals",
+      }));
     } finally {
       setSaving(false);
     }
@@ -177,20 +204,28 @@ export default function Game() {
   // ---- High-bid resolve ----
   const resolveHighBidWinner = async (winnerId) => {
     if (!isAdmin || !game?.highBid?.active) return;
+    const round = game.highBid.round;
+    setFormErrors((p) => ({ ...p, highBid: null }));
+
     if (!selectedBidder) {
-      alert("Select the high-bidder first.");
+      setFormErrors((p) => ({
+        ...p,
+        highBid: "Select the high-bidder first.",
+      }));
       return;
     }
     if (!highStakeText) {
-      alert("Enter stake per loser.");
+      setFormErrors((p) => ({ ...p, highBid: "Enter stake per loser." }));
       return;
     }
     const stake = Number(highStakeText);
     if (!Number.isFinite(stake) || stake <= 0) {
-      alert("Stake must be a positive number.");
+      setFormErrors((p) => ({
+        ...p,
+        highBid: "Stake must be a positive number.",
+      }));
       return;
     }
-    const round = game.highBid.round;
 
     try {
       setSaving(true);
@@ -202,11 +237,36 @@ export default function Game() {
         stake,
       });
       await refresh();
-      alert(
-        "Side game resolved. Re-enter bids (< 8) and Set Bids to continue."
-      );
+      alert("Side game resolved. Re-enter bids and Set Bids to continue.");
     } catch (e) {
-      alert(e.message || "Failed to resolve side game");
+      setFormErrors((p) => ({
+        ...p,
+        highBid: e.message || "Failed to resolve side game",
+      }));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // ---- High-bid cancel ----
+  const onCancelHighBid = async () => {
+    if (!game?.highBid?.round) return;
+    const round = game.highBid.round;
+    try {
+      setSaving(true);
+      const response = await fetch(`/api/game/${gameId}/cancel-highbid`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminKey, round }),
+      });
+      if (!response.ok) {
+        throw new Error("Failed to cancel high bid");
+      }
+      await refresh();
+      setEditBids((prev) => ({ ...prev, [round]: true }));
+      setFormErrors((p) => ({ ...p, [round]: null, highBid: null }));
+    } catch (e) {
+      alert(e.message || "Failed to cancel high bid");
     } finally {
       setSaving(false);
     }
@@ -276,7 +336,7 @@ export default function Game() {
       <div style={layout}>
         {/* Left: rounds + high-bid */}
         <div>
-          {game.highBid?.active && (
+          {game.highBid?.active && !cancelledHighBids[game.highBid.round] && (
             <Card accent="#f59e0b" bg="#fff7ed">
               <h3 style={{ marginTop: 0 }}>Side Game (High-Bid)</h3>
               <div>
@@ -322,21 +382,15 @@ export default function Game() {
                 <button
                   style={{ ...btn }}
                   disabled={!isAdmin || saving}
-                  onClick={() => {
-                    // just hide the panel; ledger unchanged; re-enter bids < 8
-                    setSelectedBidder("");
-                    setHighStakeText("3");
-                    // after closing, user can edit bids and Set Bids again
-                    // no server call -> no ledger change
-                  }}
-                  title="Cancel side game and edit bids (< 8). Ledger unchanged until you resolve."
+                  onClick={onCancelHighBid}
+                  title="Cancel side game and edit bids. Ledger unchanged until you resolve."
                 >
                   Cancel & Edit Bids
                 </button>
               </div>
 
               <div style={{ marginTop: 10 }}>
-                <div>Who won the side game?</div>
+                <div>Did the high bidder win the side game?</div>
                 <div
                   style={{
                     display: "flex",
@@ -345,21 +399,37 @@ export default function Game() {
                     marginTop: 6,
                   }}
                 >
-                  {players.map((p) => (
-                    <button
-                      key={p.id}
-                      style={btn}
-                      disabled={!isAdmin || saving}
-                      onClick={() => resolveHighBidWinner(p.id)}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
+                  <button
+                    key="won"
+                    style={btn}
+                    disabled={!isAdmin || saving || !selectedBidder}
+                    onClick={() => resolveHighBidWinner(selectedBidder)}
+                  >
+                    Yes (Bidder Won)
+                  </button>
+                  <button
+                    key="lost"
+                    style={btn}
+                    disabled={!isAdmin || saving || !selectedBidder}
+                    onClick={() => {
+                      const otherId = players.find(
+                        (p) => p.id !== selectedBidder
+                      )?.id;
+                      if (otherId) resolveHighBidWinner(otherId);
+                    }}
+                  >
+                    No (Bidder Lost)
+                  </button>
                 </div>
                 <div style={{ marginTop: 6, color: "#92400e", fontSize: 12 }}>
                   If the high-bidder wins: bidder +3×stake; others −stake each.
                   If the bidder loses: bidder −3×stake; others +stake each.
                 </div>
+                {formErrors.highBid && (
+                  <div style={{ marginTop: 8, color: "crimson", fontSize: 13 }}>
+                    {formErrors.highBid}
+                  </div>
+                )}
               </div>
             </Card>
           )}
@@ -373,6 +443,7 @@ export default function Game() {
               rd={rr}
               isAdmin={isAdmin}
               saving={saving}
+              error={formErrors[rr.round]}
               bidInputs={bidInputs}
               setBidInputs={setBidInputs}
               actualInputs={actualInputs}
@@ -387,7 +458,7 @@ export default function Game() {
           ))}
 
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <button style={btn} onClick={refresh}>
+            <button style={btn} onClick={() => refresh()}>
               Refresh
             </button>
             {isAdmin && !summary.settlementApplied && (
@@ -437,6 +508,7 @@ function RoundCard({
   rd,
   isAdmin,
   saving,
+  error,
   bidInputs,
   setBidInputs,
   actualInputs,
@@ -468,7 +540,7 @@ function RoundCard({
   // — Show bidder order & dealer —
   const order = info?.bidderOrder || players.map((p) => p.id); // fallback to player list if backend doesn't provide
   const dealerId = info?.dealerId || order[order.length - 1];
-  const nameOf = (id) => players.find((p) => p.id === id)?.name || id;
+  const firstBidderId = order[0];
 
   // Editing flags (allow re-edit after PLAYED; actuals locked only if AUTO_AWARDED)
   const isEditingBids = editBids?.[round] ?? rd.status == null;
@@ -487,52 +559,45 @@ function RoundCard({
   // SMART actuals (front-end only, while typing)
   const smartSetActual = (pid, raw) => {
     setActualInputs((prev) => {
-      const next = { ...prev, [round]: { ...(prev[round] || {}) } };
-      next[round][pid] = raw;
+      // Create a mutable copy for this round's inputs
+      const roundInputs = { ...(prev[round] || {}), [pid]: raw };
 
-      const ids = players.map((p) => p.id);
-      const vals = ids.map((id) => {
-        const v = Number(next[round][id]);
+      // Get current values and sum, treating blanks as null
+      const playerIds = players.map((p) => p.id);
+      const values = playerIds.map((id) => {
+        const v = Number(roundInputs[id]);
         return Number.isFinite(v) ? v : null;
-        // null means blank
       });
 
-      const entered = vals.filter((v) => v !== null);
-      const sum = entered.reduce((a, b) => a + b, 0);
+      const filledCount = values.filter((v) => v !== null).length;
+      const currentSum = values.reduce((acc, v) => acc + (v || 0), 0);
 
-      // Case A: if sum == 13 → every blank becomes 0
-      if (sum === 13) {
-        ids.forEach((id, i) => {
-          if (vals[i] === null) next[round][id] = "0";
-        });
-        return next;
+      // --- Smart Fill Logic ---
+      // Only run autofill if there's at least one blank field.
+      // This lets the user freely edit all 4 fields once they are filled.
+      if (filledCount < playerIds.length) {
+        // Case 1: Three fields are filled. Autofill the last one.
+        if (filledCount === playerIds.length - 1) {
+          const missingPlayerId = playerIds.find(
+            (id) => roundInputs[id] == null || roundInputs[id] === ""
+          );
+          if (missingPlayerId) {
+            const fillValue = Math.max(0, 13 - currentSum);
+            roundInputs[missingPlayerId] = String(fillValue);
+          }
+        }
+        // Case 2: The sum of entered values is 13. Fill remaining with 0.
+        else if (currentSum === 13) {
+          playerIds.forEach((id) => {
+            if (roundInputs[id] == null || roundInputs[id] === "") {
+              roundInputs[id] = "0";
+            }
+          });
+        }
       }
 
-      // Case B: if 3 entered → last becomes 13 - sum (clamped 0..13)
-      if (entered.length === 3) {
-        const missingIndex = vals.findIndex((v) => v === null);
-        const fill = Math.max(0, Math.min(13, 13 - sum));
-        next[round][ids[missingIndex]] = String(fill);
-        return next;
-      }
-
-      // Case C: if sum > 13 and there are blanks → blanks become 0
-      if (sum > 13) {
-        ids.forEach((id, i) => {
-          if (vals[i] === null) next[round][id] = "0";
-        });
-        return next;
-      }
-
-      // Case D: if 2 (or more) entered and sum >= 13 → blanks become 0
-      if (entered.length >= 2 && sum >= 13) {
-        ids.forEach((id, i) => {
-          if (vals[i] === null) next[round][id] = "0";
-        });
-        return next;
-      }
-
-      return next;
+      // Return the final state
+      return { ...prev, [round]: roundInputs };
     });
   };
 
@@ -588,23 +653,11 @@ function RoundCard({
         <span style={{ color: statusColor }}>{status}</span>
       </div>
 
-      {/* Bidder order (with dealer/last) */}
-      <div style={{ fontSize: 13, color: "#444", margin: "6px 0 10px" }}>
-        Order:&nbsp;
-        {order.map((id, idx) => (
-          <span key={id}>
-            {nameOf(id)}
-            {id === dealerId ? " (Dealer/Last)" : ""}
-            {idx < order.length - 1 ? " → " : ""}
-          </span>
-        ))}
-      </div>
-
       <table style={table}>
         <thead>
           <tr>
             <Th>Player</Th>
-            <Th>Bid (1–8)</Th>
+            <Th>Bid (1–13; ≥8 high-bid)</Th>
             <Th>Actual (0–13)</Th>
             <Th>Round Pts</Th>
           </tr>
@@ -612,13 +665,20 @@ function RoundCard({
         <tbody>
           {players.map((p) => (
             <tr key={p.id}>
-              <Td style={{ textAlign: "left" }}>{p.name}</Td>
+              <Td style={{ textAlign: "left" }}>
+                {p.name}
+                {p.id === firstBidderId && (
+                  <small style={{ color: "#555" }}> (1st)</small>
+                )}
+                {p.id === dealerId && <b style={{ color: "#c2410c" }}> (D)</b>}
+              </Td>
               <Td>
                 {isAdmin && isEditingBids ? (
                   <input
                     type="number"
                     min={1}
-                    max={8}
+                    max={13}
+                    step={1}
                     value={bidInputs?.[round]?.[p.id] ?? ""}
                     onChange={(e) => setBidVal(p.id, e.target.value)}
                     style={{ ...input, width: 80 }}
@@ -640,6 +700,7 @@ function RoundCard({
                     type="number"
                     min={0}
                     max={13}
+                    step={1}
                     value={actualInputs?.[round]?.[p.id] ?? ""}
                     onChange={(e) => setActualVal(p.id, e.target.value)}
                     style={{ ...input, width: 80 }}
@@ -771,6 +832,21 @@ function RoundCard({
           </>
         )}
       </div>
+
+      {error && (
+        <div
+          style={{
+            color: "crimson",
+            marginTop: 8,
+            fontSize: 13,
+            background: "#fff1f2",
+            padding: "6px 10px",
+            borderRadius: 6,
+          }}
+        >
+          {error}
+        </div>
+      )}
 
       {rd.status === "AUTO_AWARDED" && (
         <div style={{ color: "#0a7", marginTop: 6 }}>

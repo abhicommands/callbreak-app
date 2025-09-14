@@ -1,4 +1,3 @@
-// server.js
 import express from "express";
 import cors from "cors";
 
@@ -18,6 +17,7 @@ app.use(express.json());
  *   roundInfo: { [1..5]: { dealerId:string, bidderOrder:string[] } }, // dealer is always last in bidderOrder
  *   perfectCounts: { [pid]: number },     // rounds where player was exact or round was auto-awarded
  *   payoutLedger: { [pid]: number },      // running money tally (carries forward)
+ *   highBid: { active: boolean, round: number, bidderIds: string[] } | null,
  *   settlementConfig: { weights:[w2,w3,w4], stake:number, locked:true },
  *   settlementApplied: boolean,
  *   lastSettlementResult?: { applied:true, appliedAt:number, ...calc },
@@ -244,12 +244,10 @@ app.post("/create-game", (req, res) => {
       weights.length !== 3 ||
       !weights.every((x) => Number.isFinite(Number(x)) && Number(x) >= 0)
     )
-      return res
-        .status(400)
-        .json({
-          error:
-            "weights must be [w2,w3,w4] non-negative numbers (e.g., [1,2,3]).",
-        });
+      return res.status(400).json({
+        error:
+          "weights must be [w2,w3,w4] non-negative numbers (e.g., [1,2,3]).",
+      });
 
     const stakeNum = Number(stake);
     if (!Number.isFinite(stakeNum) || stakeNum <= 0)
@@ -269,6 +267,7 @@ app.post("/create-game", (req, res) => {
       roundInfo: {},
       perfectCounts: Object.fromEntries(ps.map((p) => [p.id, 0])),
       payoutLedger: Object.fromEntries(ps.map((p) => [p.id, 0])),
+      highBid: null,
       settlementConfig: {
         weights: weights.map(Number),
         stake: stakeNum,
@@ -335,19 +334,19 @@ app.post("/game/:gameId/set-bids", (req, res) => {
   let sum = 0;
   for (const id of incomingIds) {
     const v = Number(bids[id]);
-    if (!Number.isFinite(v))
-      return res.status(400).json({ error: "Each bid must be a number" });
+    if (!Number.isFinite(v) || !Number.isInteger(v))
+      return res.status(400).json({ error: "Each bid must be an integer" });
     if (v < 1) return res.status(400).json({ error: "Each bid must be >= 1" });
-    if (v >= 8) anyHigh = true;
-    // (Classic rule caps at 7; keep it strict unless you want to allow 1..13)
     if (v > 13) return res.status(400).json({ error: "Bid must be <= 13" });
+    if (v >= 8) anyHigh = true;
     normalized[id] = v;
     sum += v;
   }
 
   // High-bid — don't persist; ask client to resolve side game first
   if (anyHigh) {
-    const bidderIds = incomingIds.filter((id) => Number(bids[id]) >= 8);
+    const bidderIds = incomingIds.filter((id) => normalized[id] >= 8);
+    s.highBid = { active: true, round: r, bidderIds };
     return res.status(409).json({
       error: "HIGH_BID_TRIGGERED",
       message:
@@ -358,9 +357,10 @@ app.post("/game/:gameId/set-bids", (req, res) => {
     });
   }
 
-  // Auto-award when total bids < 10 → everyone gets bid + 0.1
-  if (sum < 10) {
+  // Auto-award when total bids < 10 → everyone gets bid + 0.1, but not on last round
+  if (sum < 10 && r !== 5) {
     applyAutoAward(s, r, normalized);
+    if (s.highBid?.active && s.highBid.round === r) s.highBid = null;
     return res.json({ ok: true, autoAwarded: true, roundData: s.roundData[r] });
   }
 
@@ -375,6 +375,7 @@ app.post("/game/:gameId/set-bids", (req, res) => {
   rd.actuals = {};
   rd.points = {};
   rd.status = "BIDS_SET";
+  if (s.highBid?.active && s.highBid.round === r) s.highBid = null;
   return res.json({ ok: true, autoAwarded: false, roundData: rd });
 });
 
@@ -392,9 +393,16 @@ app.post("/game/:gameId/resolve-highbid", (req, res) => {
   if (!Number.isInteger(r) || r < 1 || r > s.rounds)
     return res.status(400).json({ error: "Invalid round" });
 
+  if (!s.highBid?.active || s.highBid.round !== r)
+    return res.status(400).json({ error: "No active high bid for this round" });
+
   const ids = new Set(s.players.map((p) => p.id));
   if (!ids.has(bidderId) || !ids.has(winnerId))
     return res.status(400).json({ error: "Invalid bidderId or winnerId" });
+  if (!s.highBid.bidderIds.includes(bidderId))
+    return res
+      .status(400)
+      .json({ error: "bidderId not in active high bidders" });
 
   const st = Number(stake);
   if (!Number.isFinite(st) || st <= 0)
@@ -416,6 +424,17 @@ app.post("/game/:gameId/resolve-highbid", (req, res) => {
     }
   }
 
+  // Clear bids for the round to force re-entry
+  const rd = (s.roundData[r] = s.roundData[r] || {
+    bids: {},
+    actuals: {},
+    points: {},
+    status: undefined,
+  });
+  rd.bids = {};
+  rd.status = undefined;
+  s.highBid = null;
+
   return res.json({
     ok: true,
     applied: {
@@ -425,10 +444,45 @@ app.post("/game/:gameId/resolve-highbid", (req, res) => {
       mode: winnerId === bidderId ? "BIDDER_WON" : "BIDDER_LOST",
     },
     payoutLedger: { ...s.payoutLedger },
+    roundData: rd,
   });
 });
 
-// 5) Admin: set actuals (resolve round). Requires all 4, sum=13.
+// 5) Admin: cancel high-bid (clears highBid without resolution)
+app.post("/game/:gameId/cancel-highbid", (req, res) => {
+  const s = sessions[req.params.gameId];
+  if (!s || s.archived)
+    return res.status(404).json({ error: "Game not found" });
+
+  const { adminKey, round } = req.body || {};
+  if (adminKey !== s.adminKey)
+    return res.status(403).json({ error: "Unauthorized" });
+
+  const r = Number(round);
+  if (!Number.isInteger(r) || r < 1 || r > s.rounds)
+    return res.status(400).json({ error: "Invalid round" });
+
+  if (!s.highBid?.active || s.highBid.round !== r)
+    return res.status(400).json({ error: "No active high bid for this round" });
+
+  // Clear bids for the round to force re-entry
+  const rd = (s.roundData[r] = s.roundData[r] || {
+    bids: {},
+    actuals: {},
+    points: {},
+    status: undefined,
+  });
+  rd.bids = {};
+  rd.status = undefined;
+  s.highBid = null;
+
+  return res.json({
+    ok: true,
+    roundData: rd,
+  });
+});
+
+// 6) Admin: set actuals (resolve round). Requires all 4, sum=13.
 app.post("/game/:gameId/set-actuals", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s || s.archived)
@@ -443,6 +497,11 @@ app.post("/game/:gameId/set-actuals", (req, res) => {
     return res.status(400).json({ error: "Invalid round" });
   if (!actuals || typeof actuals !== "object")
     return res.status(400).json({ error: "actuals is required" });
+
+  if (s.highBid?.active && s.highBid.round === r)
+    return res
+      .status(400)
+      .json({ error: "Resolve high bid for this round first" });
 
   const rd = (s.roundData[r] = s.roundData[r] || {
     bids: {},
@@ -471,10 +530,10 @@ app.post("/game/:gameId/set-actuals", (req, res) => {
   rd.actuals = {};
   for (const id of incomingIds) {
     const v = Number(actuals[id]);
-    if (!Number.isFinite(v) || v < 0 || v > 13)
+    if (!Number.isFinite(v) || !Number.isInteger(v) || v < 0 || v > 13)
       return res
         .status(400)
-        .json({ error: "Each actual must be between 0 and 13" });
+        .json({ error: "Each actual must be an integer between 0 and 13" });
     rd.actuals[id] = v;
     sum += v;
   }
@@ -485,7 +544,7 @@ app.post("/game/:gameId/set-actuals", (req, res) => {
   return res.json({ ok: true, roundData: s.roundData[r] });
 });
 
-// 6) Summary — live payout + this game totals + settlement preview (if possible) + roundInfo
+// 7) Summary — live payout + this game totals + settlement preview (if possible) + roundInfo
 app.get("/game/:gameId/summary", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s || s.archived)
@@ -518,7 +577,7 @@ app.get("/game/:gameId/summary", (req, res) => {
   res.json(resp);
 });
 
-// 7) Admin: resolve game (apply final settlement)
+// 8) Admin: resolve game (apply final settlement)
 app.post("/game/:gameId/resolve-game", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s || s.archived)
@@ -552,7 +611,7 @@ app.post("/game/:gameId/resolve-game", (req, res) => {
   }
 });
 
-// 8) Admin: start a NEW 5-round game, carrying payout ledger forward
+// 9) Admin: start a NEW 5-round game, carrying payout ledger forward
 // Dealer for new game = loser (last place) of last settlement by totals
 app.post("/game/:gameId/next-game", (req, res) => {
   const old = sessions[req.params.gameId];
@@ -579,6 +638,7 @@ app.post("/game/:gameId/next-game", (req, res) => {
     roundInfo: {},
     perfectCounts: Object.fromEntries(old.players.map((p) => [p.id, 0])),
     payoutLedger: { ...old.payoutLedger }, // carry forward
+    highBid: null,
     settlementConfig: { ...old.settlementConfig },
     settlementApplied: false,
     archived: false,
@@ -601,7 +661,7 @@ app.post("/game/:gameId/next-game", (req, res) => {
   res.json({ gameId, adminKey: newAdminKey, roundInfo: newGame.roundInfo });
 });
 
-// 9) Admin: reorder players (recomputes dealer/bidder rotation)
+// 10) Admin: reorder players (recomputes dealer/bidder rotation)
 app.post("/game/:gameId/reorder-players", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s || s.archived)
@@ -628,7 +688,7 @@ app.post("/game/:gameId/reorder-players", (req, res) => {
   res.json({ ok: true, players: s.players, roundInfo: s.roundInfo });
 });
 
-// 10) Admin: override dealer for a round (recomputes bidder order)
+// 11) Admin: override dealer for a round (recomputes bidder order)
 app.post("/game/:gameId/set-dealer", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s || s.archived)
@@ -657,7 +717,7 @@ app.post("/game/:gameId/set-dealer", (req, res) => {
   res.json({ ok: true, roundInfo: s.roundInfo[r] });
 });
 
-// 11) Admin: override full bidder order for a round (last is dealer)
+// 12) Admin: override full bidder order for a round (last is dealer)
 app.post("/game/:gameId/set-bidders", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s || s.archived)
