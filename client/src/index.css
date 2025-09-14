@@ -1,0 +1,36 @@
+:root {
+  color-scheme: light;
+  --bg: #f6f7fb;
+}
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Inter, Roboto,
+    Arial;
+  background: var(--bg);
+  color: #111;
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+table {
+  font-size: 14px;
+}
+h1,
+h2,
+h3 {
+  letter-spacing: 0.2px;
+}
