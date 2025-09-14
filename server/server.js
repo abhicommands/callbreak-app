@@ -8,24 +8,39 @@ app.use(express.json());
 // ======================== In-memory store ========================
 /**
  * sessions[gameId] = {
+ *   // identity
+ *   seriesId: string,            // NEW: all games in a series share this
+ *   gameIndex: number,           // NEW: 1,2,3...
  *   gameId, name, rounds: 5,
+ *   createdAt: number,
+ *   resolvedAt?: number,
+ *   archived: boolean,
+ *
+ *   // players & config
  *   players: [{ id, name }],
  *   adminKey,
+ *   settlementConfig: { weights:[w2,w3,w4], stake:number, locked:true },
+ *
+ *   // state
+ *   roundInfo: { [1..5]: { dealerId:string, bidderOrder:string[] } }, // dealer last
  *   roundData: {
- *     [1..5]: { bids:{[pid]:number}, actuals:{[pid]:number}, points:{[pid]:number}, status:"BIDS_SET"|"AUTO_AWARDED"|"PLAYED"|undefined, locked?:boolean }
+ *     [1..5]: {
+ *       bids:{[pid]:number}, actuals:{[pid]:number}, points:{[pid]:number},
+ *       status:"BIDS_SET"|"AUTO_AWARDED"|"PLAYED"|undefined,
+ *       locked?:boolean
+ *     }
  *   },
- *   roundInfo: { [1..5]: { dealerId:string, bidderOrder:string[] } }, // dealer is always last in bidderOrder
  *   perfectCounts: { [pid]: number },
  *   payoutLedger: { [pid]: number },
  *   highBid: { active: boolean, round: number, bidderIds: string[] } | null,
- *   settlementConfig: { weights:[w2,w3,w4], stake:number, locked:true },
+ *
+ *   // computed / lifecycle
  *   settlementApplied: boolean,
  *   lastSettlementResult?: { applied:true, appliedAt:number, ...calc },
- *   // NEW: immutable per-round history + event timeline
+ *
+ *   // immutable history (per round) — surfaced only after game is resolved
  *   roundHistory: { [round:number]: { at:number, round:number, type:"AUTO_AWARDED"|"PLAYED", bids:any, actuals?:any, points:any, status:string } },
  *   roundEvents: { [round:number]: Array<{ at:number, type:string, [k:string]:any }> },
- *   archived: boolean,
- *   createdAt: number
  * }
  */
 const sessions = {};
@@ -55,13 +70,11 @@ function ensureHistoryStructs(s) {
   if (!s.roundHistory) s.roundHistory = {};
   if (!s.roundEvents) s.roundEvents = {};
 }
-
 function pushRoundEvent(s, round, evt) {
   ensureHistoryStructs(s);
   if (!s.roundEvents[round]) s.roundEvents[round] = [];
   s.roundEvents[round].push({ at: Date.now(), round, ...evt });
 }
-
 function snapshotRoundOnce(s, round, snapshot) {
   ensureHistoryStructs(s);
   if (!s.roundHistory[round]) {
@@ -70,7 +83,7 @@ function snapshotRoundOnce(s, round, snapshot) {
 }
 
 function calcPoints(bid, actual) {
-  // Base round scoring: exact → bid; overtricks → bid + (extra/10); under → -bid
+  // exact → bid; overtricks → bid + (extra/10); under → -bid
   if (typeof bid !== "number" || typeof actual !== "number") return 0;
   if (actual < bid) return -bid;
   const extra = actual - bid;
@@ -89,6 +102,7 @@ function totalsPoints(s) {
   }
   return totals;
 }
+
 function allRoundsResolved(s) {
   for (let r = 1; r <= s.rounds; r++) {
     const st = s.roundData?.[r]?.status;
@@ -98,7 +112,7 @@ function allRoundsResolved(s) {
 }
 
 /** Initialize dealer/bidder rotation for 5 rounds.
- * Round r dealer = players[(r-1) % 4], bidderOrder = next...wrap..., dealer last
+ * Round r dealer = players[(r-1) % 4]; bidderOrder = (next...wrap...) dealer last.
  * If startDealerId provided, rotate so that round 1 dealer = startDealerId.
  */
 function initDealerRotation(s, startDealerId = null) {
@@ -109,13 +123,12 @@ function initDealerRotation(s, startDealerId = null) {
 
   if (startDealerId) {
     const idx = baseOrder.findIndex((p) => p.id === startDealerId);
-    if (idx >= 0) {
+    if (idx >= 0)
       baseOrder = [...baseOrder.slice(idx), ...baseOrder.slice(0, idx)];
-    }
   }
 
   for (let r = 1; r <= s.rounds; r++) {
-    const dealerIndex = (r - 1) % n; // cycles
+    const dealerIndex = (r - 1) % n;
     const dealerId = baseOrder[dealerIndex].id;
     const inOrder = [
       ...baseOrder.slice(dealerIndex + 1),
@@ -125,7 +138,7 @@ function initDealerRotation(s, startDealerId = null) {
   }
 }
 
-/** Apply auto-award for a round: everyone gets bid + 0.1, status= AUTO_AWARDED. */
+/** Apply auto-award for a round (NOT round 5): everyone gets bid + 0.1. */
 function applyAutoAward(s, round, bidsObj) {
   ensurePerfectCounts(s);
   const rd = (s.roundData[round] = s.roundData[round] || {
@@ -142,10 +155,11 @@ function applyAutoAward(s, round, bidsObj) {
     rd.bids[p.id] = b;
     const points = Number((b + 0.1).toFixed(1));
     rd.points[p.id] = points;
-    s.perfectCounts[p.id] = (s.perfectCounts[p.id] || 0) + 1; // counts as "perfect" per your rule
+    // counts as “perfect” by your rule
+    s.perfectCounts[p.id] = (s.perfectCounts[p.id] || 0) + 1;
   }
   rd.status = "AUTO_AWARDED";
-  rd.locked = true; // lock the round (immutable)
+  rd.locked = true;
   snapshotRoundOnce(s, round, {
     type: "AUTO_AWARDED",
     bids: { ...rd.bids },
@@ -169,7 +183,7 @@ function scorePlayedRound(s, round) {
     if (a === b) s.perfectCounts[p.id] = (s.perfectCounts[p.id] || 0) + 1;
   }
   rd.status = "PLAYED";
-  rd.locked = true; // lock the round (immutable)
+  rd.locked = true;
   snapshotRoundOnce(s, round, {
     type: "PLAYED",
     bids: { ...rd.bids },
@@ -186,14 +200,13 @@ function scorePlayedRound(s, round) {
 
 /** Compute final settlement, with special Exact-5 override. */
 function computeFinalSettlement(s) {
-  const totals = totalsPoints(s); // points this game
+  const totals = totalsPoints(s);
   const baseRanking = s.players
     .map((p) => ({ id: p.id, name: p.name, total: Number(totals[p.id] || 0) }))
     .sort((a, b) => b.total - a.total);
 
   if (baseRanking.length !== 4) throw new Error("Invalid players");
 
-  // Special override: any player with perfectCounts >=5 becomes overall winner.
   ensurePerfectCounts(s);
   const perfectWinners = s.players.filter(
     (p) => (s.perfectCounts[p.id] || 0) >= 5
@@ -263,6 +276,23 @@ function computeFinalSettlement(s) {
 
 // ============================ API ==============================
 
+// 0) Series helpers
+function listSeriesGames(seriesId) {
+  return Object.values(sessions)
+    .filter((s) => (s.seriesId || s.gameId) === seriesId)
+    .map((g) => ({
+      seriesId: g.seriesId,
+      gameId: g.gameId,
+      gameIndex: g.gameIndex || 1,
+      name: g.name,
+      createdAt: g.createdAt,
+      resolvedAt: g.resolvedAt || null,
+      archived: !!g.archived,
+      settlementApplied: !!g.settlementApplied,
+    }))
+    .sort((a, b) => a.gameIndex - b.gameIndex);
+}
+
 // 1) Create game
 app.post("/create-game", (req, res) => {
   try {
@@ -271,11 +301,10 @@ app.post("/create-game", (req, res) => {
       players = [],
       weights,
       stake = 1,
-      // existing (kept): can pass a known player id — usually not known at creation time
-      startDealerId = null,
-      // NEW ergonomic options:
-      startDealerName = null, // case-insensitive match against provided player names
-      startDealerIndex = null, // 0..3
+      startDealerId = null, // can pass a known player id
+      startDealerName = null, // convenience: match by name
+      startDealerIndex = null, // convenience: 0..3
+      seriesId = null, // OPTIONAL: attach to an existing series explicitly
     } = req.body || {};
 
     if (!name || !Array.isArray(players) || players.length !== 4)
@@ -297,35 +326,54 @@ app.post("/create-game", (req, res) => {
     if (!Number.isFinite(stakeNum) || stakeNum <= 0)
       return res.status(400).json({ error: "stake must be a positive number" });
 
+    // Figure out series & index
+    const newSeriesId = seriesId || rid(10);
+    const maxIndexInSeries = listSeriesGames(newSeriesId).reduce(
+      (m, g) => Math.max(m, g.gameIndex || 0),
+      0
+    );
+    const thisGameIndex = maxIndexInSeries + 1;
+
     const gameId = rid(8);
     const adminKey = rid(12);
     const ps = players.map((n) => ({ id: pid(), name: String(n).trim() }));
 
     sessions[gameId] = {
+      // identity
+      seriesId: newSeriesId,
+      gameIndex: thisGameIndex,
       gameId,
       name: String(name).trim(),
       rounds: 5,
+      createdAt: Date.now(),
+      archived: false,
+
+      // players & config
       players: ps,
       adminKey,
-      roundData: {},
-      roundInfo: {},
-      perfectCounts: Object.fromEntries(ps.map((p) => [p.id, 0])),
-      payoutLedger: Object.fromEntries(ps.map((p) => [p.id, 0])),
-      highBid: null,
       settlementConfig: {
         weights: weights.map(Number),
         stake: stakeNum,
         locked: true,
       },
+
+      // state
+      roundInfo: {},
+      roundData: {},
+      perfectCounts: Object.fromEntries(ps.map((p) => [p.id, 0])),
+      payoutLedger: Object.fromEntries(ps.map((p) => [p.id, 0])),
+      highBid: null,
+
+      // lifecycle
       settlementApplied: false,
-      // NEW: immutable history containers
+      lastSettlementResult: undefined,
+
+      // history
       roundHistory: {},
       roundEvents: {},
-      archived: false,
-      createdAt: Date.now(),
     };
 
-    // dealer resolution priority: id > name > index > default
+    // resolve starting dealer
     let resolvedDealerId = null;
     if (startDealerId && ps.some((p) => p.id === startDealerId)) {
       resolvedDealerId = startDealerId;
@@ -340,10 +388,13 @@ app.post("/create-game", (req, res) => {
     }
 
     initDealerRotation(sessions[gameId], resolvedDealerId || ps[0].id);
+
     res.json({
+      seriesId: sessions[gameId].seriesId,
+      gameIndex: sessions[gameId].gameIndex,
       gameId,
       adminKey,
-      players: ps, // helpful so clients know ids immediately
+      players: ps,
       settlementConfig: sessions[gameId].settlementConfig,
       roundInfo: sessions[gameId].roundInfo,
       startDealerId: resolvedDealerId || ps[0].id,
@@ -386,16 +437,14 @@ app.post("/game/:gameId/set-bids", (req, res) => {
       .json({ error: "Round is locked; history is immutable." });
 
   const validIds = new Set(s.players.map((p) => p.id));
-  const playersCount = s.players.length;
   const incomingIds = Object.keys(bids);
   if (
-    incomingIds.length !== playersCount ||
+    incomingIds.length !== s.players.length ||
     !incomingIds.every((id) => validIds.has(id))
-  ) {
+  )
     return res
       .status(400)
       .json({ error: "Provide bids for all 4 valid players." });
-  }
 
   const normalized = {};
   let anyHigh = false;
@@ -429,14 +478,14 @@ app.post("/game/:gameId/set-bids", (req, res) => {
     });
   }
 
-  // Auto-award when total bids < 10 → everyone gets bid + 0.1, but not on last round
+  // Auto-award when total bids < 10, but NOT on last round (r !== 5)
   if (sum < 10 && r !== 5) {
     applyAutoAward(s, r, normalized);
     if (s.highBid?.active && s.highBid.round === r) s.highBid = null;
     return res.json({ ok: true, autoAwarded: true, roundData: s.roundData[r] });
   }
 
-  // Otherwise just persist bids and wait for actuals
+  // Persist bids and wait for actuals
   const rd = (s.roundData[r] = s.roundData[r] || {
     bids: {},
     actuals: {},
@@ -448,6 +497,7 @@ app.post("/game/:gameId/set-bids", (req, res) => {
   rd.points = {};
   rd.status = "BIDS_SET";
   pushRoundEvent(s, r, { type: "BIDS_SET", bids: { ...rd.bids } });
+
   if (s.highBid?.active && s.highBid.round === r) s.highBid = null;
   return res.json({ ok: true, autoAwarded: false, roundData: rd });
 });
@@ -495,7 +545,7 @@ app.post("/game/:gameId/resolve-highbid", (req, res) => {
     }
   }
 
-  // Clear bids for the round to force re-entry (only if not already locked)
+  // Clear bids for the round to force re-entry (if not locked)
   const rd = (s.roundData[r] = s.roundData[r] || {
     bids: {},
     actuals: {},
@@ -646,6 +696,8 @@ app.get("/game/:gameId/summary", (req, res) => {
   ensurePerfectCounts(s);
 
   const resp = {
+    seriesId: s.seriesId,
+    gameIndex: s.gameIndex,
     gameId: s.gameId,
     name: s.name,
     players: s.players,
@@ -662,7 +714,7 @@ app.get("/game/:gameId/summary", (req, res) => {
     try {
       resp.settlement = { applied: false, ...computeFinalSettlement(s) }; // preview
     } catch {
-      // ignore if compute fails
+      // ignore
     }
   }
 
@@ -692,9 +744,10 @@ app.post("/game/:gameId/resolve-game", (req, res) => {
       s.payoutLedger[p.toPlayerId] += p.amount;
     }
     s.settlementApplied = true;
+    s.resolvedAt = Date.now();
     s.lastSettlementResult = {
       applied: true,
-      appliedAt: Date.now(),
+      appliedAt: s.resolvedAt,
       ...result,
     };
     res.json({ ok: true, payoutLedger: { ...s.payoutLedger } });
@@ -720,27 +773,41 @@ app.post("/game/:gameId/next-game", (req, res) => {
 
   const gameId = rid(8);
   const newAdminKey = rid(12);
+  const seriesId = old.seriesId || old.gameId;
+
+  const newGameIndex = (old.gameIndex || 1) + 1;
   const newGame = {
+    // identity
+    seriesId,
+    gameIndex: newGameIndex,
     gameId,
     name: old.name,
     rounds: 5,
+    createdAt: Date.now(),
+    archived: false,
+
+    // players & config
     players: old.players.map((p) => ({ ...p })),
     adminKey: newAdminKey,
-    roundData: {},
+    settlementConfig: { ...old.settlementConfig },
+
+    // state
     roundInfo: {},
+    roundData: {},
     perfectCounts: Object.fromEntries(old.players.map((p) => [p.id, 0])),
     payoutLedger: { ...old.payoutLedger }, // carry forward
     highBid: null,
-    settlementConfig: { ...old.settlementConfig },
+
+    // lifecycle
     settlementApplied: false,
-    // new game starts with empty history
+    lastSettlementResult: undefined,
+
+    // history
     roundHistory: {},
     roundEvents: {},
-    archived: false,
-    createdAt: Date.now(),
   };
 
-  // Compute loser (last place) from last settlement
+  // Compute loser (last place) from last settlement to be next game's starting dealer
   let startDealerId = newGame.players[0].id;
   const lastRank = old.lastSettlementResult?.ranking;
   if (Array.isArray(lastRank) && lastRank.length === 4) {
@@ -753,7 +820,13 @@ app.post("/game/:gameId/next-game", (req, res) => {
   old.archived = true;
   sessions[gameId] = newGame;
 
-  res.json({ gameId, adminKey: newAdminKey, roundInfo: newGame.roundInfo });
+  res.json({
+    seriesId,
+    gameIndex: newGameIndex,
+    gameId,
+    adminKey: newAdminKey,
+    roundInfo: newGame.roundInfo,
+  });
 });
 
 // 10) Admin: reorder players (recomputes dealer/bidder rotation)
@@ -839,53 +912,45 @@ app.post("/game/:gameId/set-bidders", (req, res) => {
   res.json({ ok: true, roundInfo: s.roundInfo[r] });
 });
 
-// ============ NEW: immutable history endpoints ============
+// ============ SERIES & HISTORY (game-level only) ============
 
-// all rounds (works even if archived)
+// A) List games in the same series as :gameId (ordered by gameIndex)
+app.get("/series/by-game/:gameId", (req, res) => {
+  const cur = sessions[req.params.gameId];
+  if (!cur) return res.status(404).json({ error: "Game not found" });
+  const seriesId = cur.seriesId || cur.gameId;
+  const games = listSeriesGames(seriesId);
+  res.json({ seriesId, currentGameId: cur.gameId, games });
+});
+
+// B) List games by seriesId directly (ordered by gameIndex)
+app.get("/series/:seriesId/games", (req, res) => {
+  const games = listSeriesGames(req.params.seriesId);
+  if (!games.length) return res.status(404).json({ error: "Series not found" });
+  res.json({ seriesId: req.params.seriesId, games });
+});
+
+// C) Full game history (all rounds) by gameId — ONLY AFTER RESOLUTION
 app.get("/game/:gameId/history", (req, res) => {
   const s = sessions[req.params.gameId];
   if (!s) return res.status(404).json({ error: "Game not found" });
 
-  const roundParam = req.query.round;
-  if (roundParam !== undefined) {
-    const r = Number(roundParam);
-    if (!Number.isInteger(r) || r < 1 || r > (s.rounds || 5)) {
-      return res.status(400).json({ error: "Invalid round" });
-    }
-    return res.json({
-      gameId: s.gameId,
-      name: s.name,
-      round: r,
-      snapshot: s.roundHistory?.[r] || null,
-      events: s.roundEvents?.[r] || [],
-      players: s.players,
+  if (!s.settlementApplied) {
+    return res.status(403).json({
+      error: "HISTORY_LOCKED_UNTIL_GAME_RESOLVED",
+      message: "Game history becomes available after the game is resolved.",
     });
   }
 
   res.json({
+    seriesId: s.seriesId,
+    gameIndex: s.gameIndex,
     gameId: s.gameId,
     name: s.name,
     players: s.players,
     roundHistory: s.roundHistory || {},
     roundEvents: s.roundEvents || {},
-  });
-});
-
-// single round (works even if archived)
-app.get("/game/:gameId/history/:round", (req, res) => {
-  const s = sessions[req.params.gameId];
-  if (!s) return res.status(404).json({ error: "Game not found" });
-  const r = Number(req.params.round);
-  if (!Number.isInteger(r) || r < 1 || r > (s.rounds || 5)) {
-    return res.status(400).json({ error: "Invalid round" });
-  }
-  res.json({
-    gameId: s.gameId,
-    name: s.name,
-    round: r,
-    snapshot: s.roundHistory?.[r] || null,
-    events: s.roundEvents?.[r] || [],
-    players: s.players,
+    resolvedAt: s.resolvedAt || null,
   });
 });
 

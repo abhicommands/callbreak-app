@@ -20,20 +20,28 @@ export default function Game() {
   const [summary, setSummary] = useState(null);
   const [err, setErr] = useState("");
   const [saving, setSaving] = useState(false);
-  const [formErrors, setFormErrors] = useState({}); // For inline errors instead of alerts
-  const [cancelledHighBids, setCancelledHighBids] = useState({}); // Locally hide cancelled side-games
+  const [formErrors, setFormErrors] = useState({});
+  const [cancelledHighBids, setCancelledHighBids] = useState({});
 
   // local inputs (string while typing)
   const [bidInputs, setBidInputs] = useState({});
   const [actualInputs, setActualInputs] = useState({});
 
-  // per-round edit toggles (editable even after PLAYED)
+  // per-round edit toggles
   const [editBids, setEditBids] = useState({});
   const [editActuals, setEditActuals] = useState({});
 
   // high-bid ui
   const [selectedBidder, setSelectedBidder] = useState("");
-  const [highStakeText, setHighStakeText] = useState("3"); // string while typing
+  const [highStakeText, setHighStakeText] = useState("3");
+
+  // === NEW: History (series-level picker, game-level history) ===
+  const [showHistory, setShowHistory] = useState(false);
+  const [series, setSeries] = useState(null); // { seriesId, currentGameId, games:[...] }
+  const [historyErr, setHistoryErr] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [selectedHistoryGameId, setSelectedHistoryGameId] = useState(null);
+  const [historyData, setHistoryData] = useState(null); // { players, roundHistory, roundEvents, ... }
 
   async function refresh(attempts = 3) {
     setErr("");
@@ -60,7 +68,7 @@ export default function Game() {
         setBidInputs(seedB);
         setActualInputs(seedA);
 
-        // default edit states: closed; you can open via "Edit ..." buttons
+        // defaults: open inputs depending on state
         const eb = {},
           ea = {};
         for (let r = 1; r <= 5; r++) {
@@ -71,9 +79,7 @@ export default function Game() {
         setEditBids(eb);
         setEditActuals(ea);
 
-        // Reset cancelledHighBids to ensure panel shows if highBid is active
         setCancelledHighBids({});
-
         if (g.highBid?.active && Array.isArray(g.highBid.bidderIds)) {
           setSelectedBidder(
             g.highBid.bidderIds.length === 1 ? g.highBid.bidderIds[0] : ""
@@ -81,7 +87,7 @@ export default function Game() {
         } else {
           setSelectedBidder("");
         }
-        return; // Success
+        return; // success
       } catch (e) {
         if (i === attempts - 1) setErr(e.message || "Failed to load game data");
       }
@@ -93,6 +99,70 @@ export default function Game() {
       refresh().catch((e) => setErr(e.message));
     }
   }, [gameId]);
+
+  // ======== History helpers =========
+  async function loadSeries() {
+    try {
+      setHistoryErr("");
+      const res = await fetch(`/api/series/by-game/${gameId}`);
+      if (!res.ok) {
+        const t = await res.text();
+        throw new Error(t || "Failed to load series");
+      }
+      const data = await res.json();
+      setSeries(data);
+
+      // Pick a sensible default:
+      // 1) if current game is resolved, use it
+      // 2) else pick the last resolved game by gameIndex
+      let pickId = null;
+      const cur = data.games.find((g) => g.gameId === data.currentGameId);
+      if (cur?.settlementApplied) {
+        pickId = cur.gameId;
+      } else {
+        const resolved = [...data.games].filter((g) => g.settlementApplied);
+        if (resolved.length) {
+          pickId = resolved[resolved.length - 1].gameId;
+        }
+      }
+      setSelectedHistoryGameId(pickId);
+      if (pickId) await loadHistoryForGame(pickId);
+      else {
+        setHistoryData(null);
+        setHistoryErr("No resolved games yet. Resolve a game to view history.");
+      }
+    } catch (e) {
+      setHistoryErr(e.message || "Failed to load series");
+    }
+  }
+
+  async function loadHistoryForGame(gid) {
+    setHistoryLoading(true);
+    setHistoryErr("");
+    try {
+      const res = await fetch(`/api/game/${gid}/history`);
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || "Failed to load history");
+      }
+      const data = await res.json();
+      setHistoryData(data);
+    } catch (e) {
+      setHistoryData(null);
+      setHistoryErr(e.message || "Failed to load history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  // When toggling open, pull the series once
+  useEffect(() => {
+    if (showHistory && !series) {
+      loadSeries().catch((e) =>
+        setHistoryErr(e.message || "Failed to load series")
+      );
+    }
+  }, [showHistory]); // eslint-disable-line
 
   const isAdmin = Boolean(adminKey);
   const players = game?.players || [];
@@ -122,7 +192,7 @@ export default function Game() {
   // ---- Set bids (all 4 at once, 1–13; >=8 triggers high-bid) ----
   const setRoundBids = async (round) => {
     if (!isAdmin) return;
-    setFormErrors((p) => ({ ...p, [round]: null })); // Clear previous errors
+    setFormErrors((p) => ({ ...p, [round]: null }));
     const bids = {};
     for (const p of players) {
       const raw = bidInputs?.[round]?.[p.id] ?? "";
@@ -150,8 +220,8 @@ export default function Game() {
             e?.data?.error ||
             "High bid triggered! Resolve the side game below, or cancel to re-enter bids.",
         }));
-        setCancelledHighBids((p) => ({ ...p, [round]: false })); // Ensure panel shows
-        await refresh(); // Show high-bid panel
+        setCancelledHighBids((p) => ({ ...p, [round]: false }));
+        await refresh();
       } else {
         setFormErrors((p) => ({
           ...p,
@@ -166,7 +236,7 @@ export default function Game() {
   // ---- Set actuals (must sum to 13) ----
   const setRoundActuals = async (round) => {
     if (!isAdmin) return;
-    setFormErrors((p) => ({ ...p, [round]: null })); // Clear previous errors
+    setFormErrors((p) => ({ ...p, [round]: null }));
     const actuals = {};
     let sum = 0;
     for (const p of players) {
@@ -259,9 +329,7 @@ export default function Game() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ adminKey, round }),
       });
-      if (!response.ok) {
-        throw new Error("Failed to cancel high bid");
-      }
+      if (!response.ok) throw new Error("Failed to cancel high bid");
       await refresh();
       setEditBids((prev) => ({ ...prev, [round]: true }));
       setFormErrors((p) => ({ ...p, [round]: null, highBid: null }));
@@ -332,6 +400,39 @@ export default function Game() {
         weights={game.settlementConfig?.weights}
         stake={game.settlementConfig?.stake}
       />
+
+      {/* Top actions */}
+      <div
+        style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}
+      >
+        <button
+          style={{ ...btn, background: "#2563eb", borderColor: "#1e40af" }}
+          onClick={async () => {
+            const next = !showHistory;
+            setShowHistory(next);
+            if (next && !series) {
+              await loadSeries();
+            }
+          }}
+        >
+          {showHistory ? "Hide Game History" : "View Game History"}
+        </button>
+      </div>
+
+      {/* History viewer (read-only): series dropdown + full game history */}
+      {showHistory && (
+        <GameHistoryCard
+          series={series}
+          historyData={historyData}
+          historyErr={historyErr}
+          loading={historyLoading}
+          selectedGameId={selectedHistoryGameId}
+          setSelectedGameId={async (gid) => {
+            setSelectedHistoryGameId(gid);
+            if (gid) await loadHistoryForGame(gid);
+          }}
+        />
+      )}
 
       <div style={layout}>
         {/* Left: rounds + high-bid */}
@@ -485,7 +586,7 @@ export default function Game() {
           </div>
         </div>
 
-        {/* Right: sticky column so points always visible */}
+        {/* Right: sticky column */}
         <div style={{ position: "sticky", top: 12, alignSelf: "start" }}>
           <PayoutLeaderboard summary={summary} />
           <TotalPointsCard
@@ -537,12 +638,10 @@ function RoundCard({
       ? "#111"
       : "#999";
 
-  // — Show bidder order & dealer —
-  const order = info?.bidderOrder || players.map((p) => p.id); // fallback to player list if backend doesn't provide
+  const order = info?.bidderOrder || players.map((p) => p.id);
   const dealerId = info?.dealerId || order[order.length - 1];
   const firstBidderId = order[0];
 
-  // Editing flags (allow re-edit after PLAYED; actuals locked only if AUTO_AWARDED)
   const isEditingBids = editBids?.[round] ?? rd.status == null;
   const isEditingActuals =
     editActuals?.[round] ??
@@ -556,27 +655,19 @@ function RoundCard({
       [round]: { ...(prev[round] || {}), [pid]: val },
     }));
 
-  // SMART actuals (front-end only, while typing)
+  // smart actuals
   const smartSetActual = (pid, raw) => {
     setActualInputs((prev) => {
-      // Create a mutable copy for this round's inputs
       const roundInputs = { ...(prev[round] || {}), [pid]: raw };
-
-      // Get current values and sum, treating blanks as null
       const playerIds = players.map((p) => p.id);
       const values = playerIds.map((id) => {
         const v = Number(roundInputs[id]);
         return Number.isFinite(v) ? v : null;
       });
-
       const filledCount = values.filter((v) => v !== null).length;
       const currentSum = values.reduce((acc, v) => acc + (v || 0), 0);
 
-      // --- Smart Fill Logic ---
-      // Only run autofill if there's at least one blank field.
-      // This lets the user freely edit all 4 fields once they are filled.
       if (filledCount < playerIds.length) {
-        // Case 1: Three fields are filled. Autofill the last one.
         if (filledCount === playerIds.length - 1) {
           const missingPlayerId = playerIds.find(
             (id) => roundInputs[id] == null || roundInputs[id] === ""
@@ -585,9 +676,7 @@ function RoundCard({
             const fillValue = Math.max(0, 13 - currentSum);
             roundInputs[missingPlayerId] = String(fillValue);
           }
-        }
-        // Case 2: The sum of entered values is 13. Fill remaining with 0.
-        else if (currentSum === 13) {
+        } else if (currentSum === 13) {
           playerIds.forEach((id) => {
             if (roundInputs[id] == null || roundInputs[id] === "") {
               roundInputs[id] = "0";
@@ -595,15 +684,13 @@ function RoundCard({
           });
         }
       }
-
-      // Return the final state
       return { ...prev, [round]: roundInputs };
     });
   };
 
   const setActualVal = (pid, raw) => smartSetActual(pid, raw);
 
-  // live bid total
+  // live totals
   const bidTotalLive = (() => {
     let s = 0;
     const loc = bidInputs?.[round] || {};
@@ -614,7 +701,6 @@ function RoundCard({
     return s;
   })();
 
-  // committed bid total (from rd.bids)
   const bidTotalCommitted = (() => {
     let s = 0;
     for (const p of players) {
@@ -734,7 +820,7 @@ function RoundCard({
           marginTop: 8,
         }}
       >
-        {/* Live bid total + auto-award hint */}
+        {/* Live bid total + auto-award hint (rounds 1–4 only) */}
         <div
           style={{
             padding: "4px 8px",
@@ -745,10 +831,10 @@ function RoundCard({
           }}
         >
           Live Total: <b>{bidTotalLive}</b>{" "}
-          {bidTotalLive < 10 ? "• Auto-award if set" : ""}
+          {round !== 5 && bidTotalLive < 10 ? "• Auto-award if set" : ""}
         </div>
 
-        {/* Committed total (after Set Bids) */}
+        {/* Committed total */}
         {bidTotalCommitted !== null && (
           <div
             style={{
@@ -979,6 +1065,159 @@ function ThisGameSettlementCard({ summary }) {
           ))}
         </tbody>
       </table>
+    </Card>
+  );
+}
+
+// ===== History UI =====
+function GameHistoryCard({
+  series,
+  historyData,
+  historyErr,
+  loading,
+  selectedGameId,
+  setSelectedGameId,
+}) {
+  const players = historyData?.players || [];
+  const byId = useMemo(
+    () => Object.fromEntries(players.map((p) => [p.id, p.name])),
+    [players]
+  );
+  const fmt = (ts) => (ts ? new Date(ts).toLocaleString() : "");
+
+  const rounds = [1, 2, 3, 4, 5];
+
+  return (
+    <Card accent="#c7d2fe" bg="#eef2ff">
+      <div
+        style={{
+          display: "flex",
+          gap: 12,
+          alignItems: "center",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Game History</h3>
+
+        {/* Series selector */}
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label>Game</label>
+          <select
+            value={selectedGameId || ""}
+            onChange={(e) => {
+              const gid = e.target.value || null;
+              setSelectedGameId(gid);
+            }}
+            style={{ ...input, width: 220 }}
+            disabled={loading || !series}
+          >
+            {!series && <option value="">Loading…</option>}
+            {series &&
+              series.games.map((g) => (
+                <option
+                  key={g.gameId}
+                  value={g.settlementApplied ? g.gameId : ""}
+                  disabled={!g.settlementApplied}
+                >
+                  {`Game ${g.gameIndex} — ${
+                    g.settlementApplied ? "Resolved" : "In progress"
+                  }`}
+                </option>
+              ))}
+          </select>
+        </div>
+      </div>
+
+      {historyErr && (
+        <div style={{ marginTop: 8 }}>
+          <ErrorBox text={historyErr} />
+        </div>
+      )}
+      {loading && <div style={{ marginTop: 8 }}>Loading history…</div>}
+
+      {!loading && historyData && (
+        <>
+          <div style={{ marginTop: 8, color: "#374151" }}>
+            <div>
+              <b>{historyData.name}</b> • Game {historyData.gameIndex} •{" "}
+              <span style={{ color: "#555" }}>
+                {historyData.resolvedAt
+                  ? `Resolved ${fmt(historyData.resolvedAt)}`
+                  : ""}
+              </span>
+            </div>
+          </div>
+
+          {rounds.map((r) => {
+            const snap = historyData.roundHistory?.[r] || null;
+            const events = historyData.roundEvents?.[r] || [];
+            return (
+              <div key={r} style={{ marginTop: 12 }}>
+                <h4 style={{ margin: "8px 0" }}>
+                  Round {r}{" "}
+                  {snap?.status ? `• ${snap.status}` : "(no snapshot)"}{" "}
+                  {snap?.at ? `• ${fmt(snap.at)}` : ""}
+                </h4>
+
+                {snap ? (
+                  <table style={table}>
+                    <thead>
+                      <tr>
+                        <Th>Player</Th>
+                        <Th>Bid</Th>
+                        <Th>Actual</Th>
+                        <Th>Points</Th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {players.map((p) => {
+                        const bid = snap.bids?.[p.id];
+                        const act =
+                          snap.type === "AUTO_AWARDED"
+                            ? "—"
+                            : snap.actuals?.[p.id];
+                        const pts = snap.points?.[p.id];
+                        return (
+                          <tr key={p.id}>
+                            <Td style={{ textAlign: "left" }}>
+                              {byId[p.id] || p.id}
+                            </Td>
+                            <Td>{bid != null ? bid : "-"}</Td>
+                            <Td>{act != null ? act : "-"}</Td>
+                            <Td>
+                              {pts != null ? Number(pts).toFixed(1) : "-"}
+                            </Td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div style={{ color: "#555", fontSize: 13 }}>
+                    No snapshot yet (round in progress back then).
+                  </div>
+                )}
+
+                {events?.length ? (
+                  <div style={{ marginTop: 8 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                      Events
+                    </div>
+                    <ul style={{ margin: 0, paddingLeft: 18 }}>
+                      {events.map((ev, i) => (
+                        <li key={i} style={{ marginBottom: 2 }}>
+                          <code>{fmt(ev.at)}</code> — {ev.type}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </>
+      )}
     </Card>
   );
 }
