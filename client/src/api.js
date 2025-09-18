@@ -55,7 +55,7 @@ export async function setBids(
 
 export async function resolveHighBid(
   gameId,
-  body /* { adminKey, round, bidderId, winnerId, stake } */
+  body /* { adminKey, round, bidderId, stake, bidderWon } */
 ) {
   const r = await fetch(`${BASE}/game/${gameId}/resolve-highbid`, {
     method: "POST",
@@ -70,6 +70,18 @@ export async function setActuals(
   body /* { adminKey, round, actuals:{[pid]:number} } */
 ) {
   const r = await fetch(`${BASE}/game/${gameId}/set-actuals`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow(r);
+}
+
+export async function cancelHighBid(
+  gameId,
+  body /* { adminKey, round } */
+) {
+  const r = await fetch(`${BASE}/game/${gameId}/cancel-highbid`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -95,7 +107,7 @@ export async function nextGame(gameId, body /* { adminKey } */) {
   return jsonOrThrow(r);
 }
 
-// ---------- Seating / dealer overrides ----------
+// ---------- Seating / settings ----------
 export async function reorderPlayers(
   gameId,
   body /* { adminKey, newOrder:[pid,pid,pid,pid] } */
@@ -108,11 +120,11 @@ export async function reorderPlayers(
   return jsonOrThrow(r);
 }
 
-export async function setDealer(
+export async function setBidders(
   gameId,
-  body /* { adminKey, round, dealerId } */
+  body /* { adminKey, round, bidderOrder:[pid,...](dealer last) } */
 ) {
-  const r = await fetch(`${BASE}/game/${gameId}/set-dealer`, {
+  const r = await fetch(`${BASE}/game/${gameId}/set-bidders`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -120,11 +132,23 @@ export async function setDealer(
   return jsonOrThrow(r);
 }
 
-export async function setBidders(
+export async function updateGameSettings(
   gameId,
-  body /* { adminKey, round, bidderOrder:[pid,...](dealer last) } */
+  body /* { adminKey, autoAwardEnabled } */
 ) {
-  const r = await fetch(`${BASE}/game/${gameId}/set-bidders`, {
+  const r = await fetch(`${BASE}/game/${gameId}/settings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return jsonOrThrow(r);
+}
+
+export async function substitutePlayer(
+  gameId,
+  body /* { adminKey, outgoingPlayerId, incomingPlayerId?, incomingName? } */
+) {
+  const r = await fetch(`${BASE}/game/${gameId}/substitute`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),

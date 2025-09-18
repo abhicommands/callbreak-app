@@ -2,7 +2,7 @@
 import React from "react";
 import { Routes, Route, Navigate } from "react-router-dom";
 import Home from "./pages/Home.jsx";
-import Game from "./pages/Game.jsx";
+import Game from "./pages/game/GamePage.jsx";
 
 export default function App() {
   return (

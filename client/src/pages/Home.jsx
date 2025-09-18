@@ -12,6 +12,8 @@ export default function Home() {
     "Player 4",
   ]);
   const [weights, setWeights] = useState(["1", "2", "3"]); // strings for easy typing
+  const [startDealerIndex, setStartDealerIndex] = useState(0);
+  const [autoAwardEnabled, setAutoAwardEnabled] = useState(true);
   const [openId, setOpenId] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -40,6 +42,8 @@ export default function Home() {
         name,
         players,
         weights: parsedWeights,
+        startDealerIndex,
+        autoAwardEnabled,
       });
 
       localStorage.setItem(`adminKey:${gameId}`, adminKey);
@@ -133,6 +137,38 @@ export default function Home() {
             />
           </div>
         </div>
+
+        <div style={{ marginTop: 12 }}>
+          <label style={label}>First dealer</label>
+          <select
+            value={startDealerIndex}
+            onChange={(e) => setStartDealerIndex(Number(e.target.value))}
+            style={{ ...input, width: "100%", maxWidth: 240 }}
+          >
+            {players.map((p, i) => (
+              <option key={i} value={i}>
+                {p?.trim() ? p : `Player ${i + 1}`}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <label
+          style={{
+            ...label,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginTop: 12,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={autoAwardEnabled}
+            onChange={(e) => setAutoAwardEnabled(e.target.checked)}
+          />
+          Auto-award rounds 1–4 when bids total &lt; 10
+        </label>
 
         <button
           onClick={onCreate}
