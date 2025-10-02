@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import {
+  API_BASE,
   setBids,
   setActuals,
   resolveHighBid,
@@ -133,7 +134,7 @@ export default function GamePage() {
       try {
         setHistoryErr("");
         setHistoryLoading(true);
-        const res = await fetch(`/api/series/by-game/${viewGameId}`);
+        const res = await fetch(`${API_BASE}/series/by-game/${viewGameId}`);
         if (!res.ok) throw new Error(await res.text());
         const data = await res.json();
         if (cancelled) return;
@@ -183,7 +184,7 @@ export default function GamePage() {
     }
     try {
       if (withSpinner) setHistoryLoading(true);
-      const res = await fetch(`/api/game/${gameId}/history`);
+      const res = await fetch(`${API_BASE}/game/${gameId}/history`);
       if (!res.ok) throw new Error(await res.text());
       const data = await res.json();
       if (!cancelled()) setHistoryData(data);
@@ -543,7 +544,7 @@ export default function GamePage() {
               try {
                 setHistoryErr("");
                 setHistoryLoading(true);
-        const res = await fetch(`/api/series/by-game/${viewGameId}`);
+        const res = await fetch(`${API_BASE}/series/by-game/${viewGameId}`);
                 if (!res.ok) throw new Error(await res.text());
                 const data = await res.json();
                 setSeries(data);

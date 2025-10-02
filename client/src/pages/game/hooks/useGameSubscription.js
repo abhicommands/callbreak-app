@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getGame, getSummary } from "../../../api";
+import { API_BASE, getGame, getSummary } from "../../../api";
 
 export default function useGameSubscription(gameId, options = {}) {
   const { onRedirect } = options;
@@ -38,7 +38,7 @@ export default function useGameSubscription(gameId, options = {}) {
 
       if (cancelled) return;
 
-      const stream = new EventSource(`/api/game/${gameId}/stream`);
+      const stream = new EventSource(`${API_BASE}/game/${gameId}/stream`);
       eventSourceRef.current = stream;
 
       stream.addEventListener("open", () => {

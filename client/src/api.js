@@ -1,5 +1,14 @@
 // src/api.js
-const BASE = "/api";
+const API_BASE = normalizeBase(import.meta.env.VITE_API_BASE);
+const BASE = API_BASE;
+
+function normalizeBase(base) {
+  const fallback = "/api";
+  if (!base) return fallback;
+  const trimmed = String(base).trim();
+  if (!trimmed) return fallback;
+  return trimmed.replace(/\/+$/, "") || fallback;
+}
 
 async function jsonOrThrow(res) {
   const txt = await res.text();
@@ -155,3 +164,5 @@ export async function substitutePlayer(
   });
   return jsonOrThrow(r);
 }
+
+export { API_BASE };
