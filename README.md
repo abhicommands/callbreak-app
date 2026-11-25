@@ -29,6 +29,10 @@ Open `http://127.0.0.1:8787`. The dev command builds the frontend and starts the
 
 The browser and API test suites each start Wrangler with a temporary directory. Local data, the named Cloudflare preview environment, and the production namespace are isolated. The old Express server kept games in memory and was replaced by the Worker. Scoring remains in JavaScript under `server/src`.
 
+## Pull requests
+
+The **Verify ledger** check runs a clean install, dependency audit, lint, scoring tests, a real local Worker, and Chromium tests. It also checks both Cloudflare bundles with dry runs. Keep gameplay rules in the shared JavaScript scoring code so another mode can reuse them.
+
 ## Play and share
 
 - Saved regular calls appear in **If call made** after saving. **Confirmed** includes played and auto-awarded rounds. The points table sorts by the projected column, which equals confirmed points when no regular bids are pending.

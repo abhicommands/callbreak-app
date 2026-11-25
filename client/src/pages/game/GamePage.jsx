@@ -33,14 +33,20 @@ export default function GamePage({ seriesId }) {
   const pending = useRef(null);
 
   useEffect(() => {
-    const token = localStorage.getItem(editorStorageKey(seriesId));
+    const key = editorStorageKey(seriesId);
+    const token = localStorage.getItem(key);
     if (!token) return;
     let active = true;
     request(`${path}/editor`, { token }).then(() => {
-      if (active) setEditorKey(token);
-    }).catch(() => {});
+      if (active && localStorage.getItem(key) === token) setEditorKey(token);
+    }).catch((err) => {
+      if (active && err.status === 403 && localStorage.getItem(key) === token) {
+        localStorage.removeItem(key);
+        setEditorKey("");
+      }
+    });
     return () => { active = false; };
-  }, [seriesId, path]);
+  }, [seriesId, path, connected]);
 
   function storeEditor(token) {
     setEditorKey(token);
@@ -150,11 +156,14 @@ export default function GamePage({ seriesId }) {
 
       <div className="ledger-layout">
         <main>
-          {rounds.map((round) => (
-            <RoundEditor key={`${gameId}:${round}`} round={round} info={game.roundInfo[round]}
-              players={game.players} data={game.roundData[round] || emptyRound} game={game}
-              revision={revision} editing={editable} saving={saving} command={command} />
-          ))}
+          {rounds.map((round) => {
+            const sideGameAttempt = game.highBid?.round === round ? game.highBid.attempt : 0;
+            return (
+              <RoundEditor key={`${gameId}:${round}:${sideGameAttempt}`} round={round} info={game.roundInfo[round]}
+                players={game.players} data={game.roundData[round] || emptyRound} game={game}
+                revision={revision} editing={editable} saving={saving} command={command} />
+            );
+          })}
           <AdminActions isAdmin={Boolean(editorKey)} saving={saving}
             canResolve={allResolved} settlementApplied={settled}
             onResolveGame={() => save("resolve-game")} onNextGame={() => save("next-game")} />

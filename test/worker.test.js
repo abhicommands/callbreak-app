@@ -1,3 +1,4 @@
+import { checkWorker } from "../scripts/check-worker.js";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
 import { test } from "node:test";
@@ -11,6 +12,7 @@ test("the Worker authorizes, commits, broadcasts, restores, and survives a resta
   const worker = await localWorker();
   t.after(() => worker.dispose());
   await worker.start();
+  await checkWorker(worker.origin);
   const id = randomHex(16);
   const editor = randomHex(32);
   const recovery = randomHex(32);

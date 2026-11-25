@@ -220,8 +220,14 @@ export function applyCommand(game, action, payload, at) {
 }
 
 export function publicGame(game) {
-  const { balanceUnits: _, roundEvents: _events, roundHistory: _history, ...view } = game;
-  return { ...view, recordedRounds: Object.keys(_events).map(Number), canSubstitute: canSubstitute(game) };
+  const { balanceUnits: _, roundEvents, roundHistory: _history, highBid, ...view } = game;
+  const pending = highBid && { ...highBid, attempt: roundEvents[highBid.round].length };
+  return {
+    ...view,
+    highBid: pending,
+    recordedRounds: Object.keys(roundEvents).map(Number),
+    canSubstitute: canSubstitute(game),
+  };
 }
 
 export function getSummary(game) {

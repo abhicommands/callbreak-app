@@ -18,6 +18,12 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     expect(recovery).toMatch(/^[a-f0-9]{64}$/);
     await editor.getByRole("button", { name: "I Saved the Recovery Code" }).click();
 
+    const editorCheckFailed = editor.waitForEvent("requestfailed", (request) => request.url().endsWith("/editor"));
+    await editor.route("**/api/ledger/*/editor", (route) => route.abort(), { times: 1 });
+    await editor.reload();
+    await editorCheckFailed;
+    await expect(editor.getByRole("button", { name: "Set Bids", exact: true }).first()).toBeVisible();
+
     await viewer.goto(shareLink);
     await expect(viewer.getByText("Live sync: Online")).toBeVisible();
     await expect(viewer.getByRole("button", { name: "Set Bids" })).toHaveCount(0);
@@ -146,7 +152,23 @@ test("an editor must review live changes before resubmitting a stale draft", asy
     await secondRound.getByRole("button", { name: "Set Bids" }).click();
     await expect(secondRound.getByRole("alert")).toContainText("The ledger changed.");
     await expect(secondRound.getByLabel("Bid for Player 1")).toHaveValue("");
-    await expect(first.getByRole("region", { name: "Round 1" }).getByText("IN PROGRESS")).toBeVisible();
+    const firstRound = first.getByRole("region", { name: "Round 1" });
+    await expect(firstRound.getByText("IN PROGRESS")).toBeVisible();
+
+    const openSideGame = async () => {
+      for (const [index, bid] of [8, 2, 2, 2].entries()) {
+        await firstRound.getByLabel(`Bid for Player ${index + 1}`).fill(String(bid));
+      }
+      await firstRound.getByRole("button", { name: "Set Bids", exact: true }).click();
+      await expect(secondRound.getByRole("heading", { name: "Side Game (High Bid)" })).toBeVisible();
+    };
+    const stake = secondRound.getByPlaceholder("3", { exact: true });
+    await openSideGame();
+    await stake.fill("11");
+    await firstRound.getByRole("button", { name: "Cancel & Edit Bids" }).click();
+    await expect(secondRound.getByRole("heading", { name: "Side Game (High Bid)" })).toHaveCount(0);
+    await openSideGame();
+    await expect(stake).toHaveValue("3");
   } finally {
     await worker.dispose();
   }
