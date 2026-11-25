@@ -1,57 +1,70 @@
 import { assert } from "./errors.js";
 
-export function ensurePayoutLedger(session) {
-  if (!session.payoutLedger) session.payoutLedger = {};
-  const roster = [...(session.players || []), ...(session.inactivePlayers || [])];
-  for (const player of roster) {
-    if (!(player?.id in session.payoutLedger)) session.payoutLedger[player.id] = 0;
-  }
+const BALANCE_SCALE = 1_000_000;
+const CONFIG_SCALE = 1_000;
+
+export function validAmount(value, minimum = 0) {
+  return typeof value === "number" && value >= minimum && value <= 10_000 &&
+    Math.round(value * CONFIG_SCALE) / CONFIG_SCALE === value;
 }
 
-export function ensurePerfectCounts(session) {
-  if (!session.perfectCounts) session.perfectCounts = {};
-  const roster = [...(session.players || []), ...(session.inactivePlayers || [])];
-  for (const player of roster) {
-    if (!(player?.id in session.perfectCounts)) session.perfectCounts[player.id] = 0;
-  }
+export function balanceFromUnits(units) {
+  return units / BALANCE_SCALE;
 }
 
-export function ensureHistoryStructs(session) {
-  if (!session.roundHistory) session.roundHistory = {};
-  if (!session.roundEvents) session.roundEvents = {};
+export function transfer(session, from, to, units) {
+  const debit = session.balanceUnits[from] - units;
+  const credit = session.balanceUnits[to] + units;
+  assert(Number.isSafeInteger(debit) && Number.isSafeInteger(credit), 409, "Balance limit reached.");
+  session.balanceUnits[from] = debit;
+  session.balanceUnits[to] = credit;
 }
 
-export function pushRoundEvent(session, round, event) {
-  ensureHistoryStructs(session);
-  if (!session.roundEvents[round]) session.roundEvents[round] = [];
-  session.roundEvents[round].push({ at: Date.now(), round, ...event });
+export function pushRoundEvent(session, round, event, at) {
+  const { dealerId, bidderOrder } = session.roundInfo[round];
+  session.roundEvents[round] ??= [];
+  session.roundEvents[round].push({ at, round, dealerId, bidderOrder: [...bidderOrder], ...event });
 }
 
-export function snapshotRound(session, round, snapshot, { force = false } = {}) {
-  ensureHistoryStructs(session);
-  if (!session.roundHistory[round] || force) {
-    session.roundHistory[round] = { at: Date.now(), round, ...snapshot };
-  }
+function snapshotRound(session, round, at) {
+  const { status, bids, actuals, points } = session.roundData[round];
+  session.roundHistory[round] = {
+    at, round, status, type: status, dealerId: session.roundInfo[round].dealerId,
+    bids: { ...bids }, actuals: { ...actuals }, points: { ...points },
+  };
 }
 
 export function calcPoints(bid, actual) {
-  if (typeof bid !== "number" || typeof actual !== "number") return 0;
-  if (actual < bid) return -bid;
-  const extra = actual - bid;
-  return Number((bid + extra / 10).toFixed(1));
+  return (actual < bid ? -bid * 10 : bid * 10 + actual - bid) / 10;
 }
 
-export function totalsPoints(session) {
-  const totals = {};
-  for (const player of session.players) totals[player.id] = 0;
-  for (const round of Object.keys(session.roundData || {})) {
-    const pts = session.roundData[round]?.points || {};
-    for (const [playerId, val] of Object.entries(pts)) {
-      const value = Number(val);
-      if (!Number.isNaN(value)) totals[playerId] += value;
+export function pointTotals(session) {
+  const entries = session.players.map(({ id }) => {
+    let confirmed = 0;
+    let pending = 0;
+    for (const [round, data] of Object.entries(session.roundData)) {
+      if (data.status === "PLAYED" || data.status === "AUTO_AWARDED") {
+        confirmed += Math.round(data.points[id] * 10);
+      } else if (data.status === "BIDS_SET" && session.highBid?.round !== Number(round)) {
+        pending += data.bids[id] * 10;
+      }
     }
-  }
-  return totals;
+    return [id, { confirmed: confirmed / 10, projected: (confirmed + pending) / 10 }];
+  });
+  return {
+    totalsPoints: Object.fromEntries(entries.map(([id, score]) => [id, score.confirmed])),
+    projectedPoints: Object.fromEntries(entries.map(([id, score]) => [id, score.projected])),
+  };
+}
+
+export function perfectCounts(session) {
+  return Object.fromEntries([...session.players, ...session.inactivePlayers].map(({ id }) => [
+    id,
+    Object.values(session.roundData).filter((data) =>
+      Object.hasOwn(data.bids, id) && (data.status === "AUTO_AWARDED" ||
+        (data.status === "PLAYED" && data.bids[id] === data.actuals[id]))
+    ).length,
+  ]));
 }
 
 export function allRoundsResolved(session) {
@@ -62,8 +75,7 @@ export function allRoundsResolved(session) {
   return true;
 }
 
-export function initDealerRotation(session, startDealerId = null) {
-  session.roundInfo = {};
+export function initDealerRotation(session, startDealerId, startRound = 1) {
   const playerCount = session.players.length;
   assert(playerCount === 4, 400, "Game requires exactly 4 players.");
 
@@ -74,8 +86,8 @@ export function initDealerRotation(session, startDealerId = null) {
       baseOrder = [...baseOrder.slice(index), ...baseOrder.slice(0, index)];
   }
 
-  for (let round = 1; round <= session.rounds; round++) {
-    const dealerIndex = (round - 1) % playerCount;
+  for (let round = startRound; round <= session.rounds; round++) {
+    const dealerIndex = (round - startRound) % playerCount;
     const dealer = baseOrder[dealerIndex].id;
     const order = [
       ...baseOrder.slice(dealerIndex + 1),
@@ -85,76 +97,29 @@ export function initDealerRotation(session, startDealerId = null) {
   }
 }
 
-export function applyAutoAward(session, round, bidsByPlayer) {
-  ensurePerfectCounts(session);
-  const roundData = (session.roundData[round] = session.roundData[round] || {
-    bids: {},
-    actuals: {},
-    points: {},
-    status: undefined,
-  });
-
-  roundData.bids = {};
-  roundData.actuals = {};
-  roundData.points = {};
-
-  for (const player of session.players) {
-    const bidValue = Number(bidsByPlayer[player.id] || 0);
-    roundData.bids[player.id] = bidValue;
-    const points = Number((bidValue + 0.1).toFixed(1));
-    roundData.points[player.id] = points;
-    session.perfectCounts[player.id] = (session.perfectCounts[player.id] || 0) + 1;
-  }
-
-  roundData.status = "AUTO_AWARDED";
-  delete roundData.locked;
-
-  snapshotRound(session, round, {
-    type: "AUTO_AWARDED",
-    bids: { ...roundData.bids },
-    actuals: {},
-    points: { ...roundData.points },
-    status: roundData.status,
-  }, { force: true });
-
-  pushRoundEvent(session, round, { type: "AUTO_AWARDED", bids: { ...roundData.bids } });
+export function applyAutoAward(session, round, bids, at) {
+  const points = Object.fromEntries(Object.entries(bids).map(([id, bid]) => [id, (bid * 10 + 1) / 10]));
+  session.roundData[round] = { bids, actuals: {}, points, status: "AUTO_AWARDED" };
+  snapshotRound(session, round, at);
+  pushRoundEvent(session, round, { type: "AUTO_AWARDED", bids: { ...bids } }, at);
 }
 
-export function scorePlayedRound(session, round) {
-  ensurePerfectCounts(session);
-  const roundData = session.roundData[round];
-  roundData.points = {};
-
-  for (const player of session.players) {
-    const bidValue = Number(roundData.bids[player.id] ?? 0);
-    const actualValue = Number(roundData.actuals[player.id] ?? 0);
-    const points = calcPoints(bidValue, actualValue);
-    roundData.points[player.id] = points;
-    if (actualValue === bidValue) {
-      session.perfectCounts[player.id] = (session.perfectCounts[player.id] || 0) + 1;
-    }
-  }
-
-  roundData.status = "PLAYED";
-  delete roundData.locked;
-
-  snapshotRound(session, round, {
-    type: "PLAYED",
-    bids: { ...roundData.bids },
-    actuals: { ...roundData.actuals },
-    points: { ...roundData.points },
-    status: roundData.status,
-  }, { force: true });
-
+export function scorePlayedRound(session, round, at) {
+  const data = session.roundData[round];
+  data.points = Object.fromEntries(session.players.map(({ id }) => [
+    id, calcPoints(data.bids[id], data.actuals[id]),
+  ]));
+  data.status = "PLAYED";
+  snapshotRound(session, round, at);
   pushRoundEvent(session, round, {
     type: "PLAYED",
-    bids: { ...roundData.bids },
-    actuals: { ...roundData.actuals },
-  });
+    bids: { ...data.bids },
+    actuals: { ...data.actuals },
+  }, at);
 }
 
 export function computeFinalSettlement(session) {
-  const totals = totalsPoints(session);
+  const { totalsPoints: totals } = pointTotals(session);
   const rounds = session.rounds || 5;
 
   const playersWithPriority = session.players.map((player) => {
@@ -171,20 +136,20 @@ export function computeFinalSettlement(session) {
           active: true,
         };
       }
-      pointsByRound.push(Number(Number(value).toFixed(1)));
+      pointsByRound.push(value);
     }
 
     const isConstant =
       pointsByRound.length === rounds &&
       pointsByRound.every(
-        (point) => Math.abs(point - pointsByRound[0]) < 1e-6
+        (point) => point === pointsByRound[0]
       );
 
     const sortedPoints = [...pointsByRound].sort((a, b) => a - b);
     const isSequence =
       rounds === 5 &&
       sortedPoints.every(
-        (point, index) => Math.abs(point - (index + 1)) < 1e-6
+        (point, index) => point === index + 1
       );
 
     const priority = isSequence ? 2 : isConstant ? 1 : 0;
@@ -207,48 +172,28 @@ export function computeFinalSettlement(session) {
     return 0;
   });
 
-  ensurePerfectCounts(session);
-
-  const [winner, second, third, fourth] = ranking;
+  const [winner] = ranking;
   const { weights = [1, 2, 3], stake = 1 } = session.settlementConfig || {};
   const winnerOver20 = winner.total > 20;
 
-  const base = {
-    [second.id]: weights[0] || 0,
-    [third.id]: weights[1] || 0,
-    [fourth.id]: weights[2] || 0,
-  };
-
-  const unitsFor = (loser) =>
-    base[loser.id] * (winnerOver20 ? 2 : 1) * (loser.total < 0 ? 2 : 1);
-
-  const payouts = [
-    {
-      fromPlayerId: second.id,
+  const deltaUnits = Object.fromEntries(session.players.map(({ id }) => [id, 0]));
+  const payouts = ranking.slice(1).map((loser, index) => {
+    const fixedWeight = Math.round(weights[index] * CONFIG_SCALE);
+    const fixedStake = Math.round(stake * CONFIG_SCALE);
+    const multiplier = (winnerOver20 ? 2 : 1) * (loser.total < 0 ? 2 : 1);
+    const amountUnits = fixedWeight * fixedStake * multiplier;
+    deltaUnits[loser.id] -= amountUnits;
+    deltaUnits[winner.id] += amountUnits;
+    return {
+      fromPlayerId: loser.id,
       toPlayerId: winner.id,
-      units: unitsFor(second),
-      amount: unitsFor(second) * stake,
-    },
-    {
-      fromPlayerId: third.id,
-      toPlayerId: winner.id,
-      units: unitsFor(third),
-      amount: unitsFor(third) * stake,
-    },
-    {
-      fromPlayerId: fourth.id,
-      toPlayerId: winner.id,
-      units: unitsFor(fourth),
-      amount: unitsFor(fourth) * stake,
-    },
-  ];
-
-  const perPlayerDelta = {};
-  for (const player of session.players) perPlayerDelta[player.id] = 0;
-  for (const payout of payouts) {
-    perPlayerDelta[payout.fromPlayerId] -= payout.amount;
-    perPlayerDelta[payout.toPlayerId] += payout.amount;
-  }
+      units: fixedWeight * multiplier / CONFIG_SCALE,
+      amount: balanceFromUnits(amountUnits),
+    };
+  });
+  const perPlayerDelta = Object.fromEntries(Object.entries(deltaUnits).map(([id, units]) =>
+    [id, balanceFromUnits(units)]
+  ));
 
   return {
     totalsPoints: totals,
@@ -258,6 +203,6 @@ export function computeFinalSettlement(session) {
     winnerOver20,
     payouts,
     perPlayerDelta,
-    perfectCounts: { ...(session.perfectCounts || {}) },
+    perfectCounts: perfectCounts(session),
   };
 }

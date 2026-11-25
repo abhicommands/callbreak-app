@@ -1,689 +1,252 @@
+import { assert } from "../utils/errors.js";
 import {
-  getSession,
-  setSession,
-  listSessions,
-  generateGameId,
-  generatePlayerId,
-  generateSeriesId,
-} from "../store/sessionStore.js";
-import { HttpError, assert } from "../utils/errors.js";
-import {
-  ensurePayoutLedger,
-  ensurePerfectCounts,
-  ensureHistoryStructs,
-  pushRoundEvent,
-  snapshotRound,
-  totalsPoints,
   allRoundsResolved,
-  initDealerRotation,
   applyAutoAward,
-  scorePlayedRound,
+  balanceFromUnits,
   computeFinalSettlement,
+  initDealerRotation,
+  perfectCounts,
+  pointTotals,
+  pushRoundEvent,
+  scorePlayedRound,
+  transfer,
+  validAmount,
 } from "../utils/gameLogic.js";
 
-const sessionRedirects = new Map();
-
-function requireSession(gameId, { allowArchived = false } = {}) {
-  const session = getSession(gameId);
-  if (!session) throw new HttpError(404, "Game not found");
-  if (session.archived && !allowArchived) throw new HttpError(404, "Game not found");
-  return session;
+export function isRecord(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function ensureSettings(session) {
-  if (!session.settings) session.settings = {};
-  if (typeof session.settings.autoAwardEnabled !== "boolean") {
-    session.settings.autoAwardEnabled = true;
-  }
+function requireName(value) {
+  assert(typeof value === "string" && value.trim().length > 0 && value.trim().length <= 80,
+    400, "Names must be between 1 and 80 characters.");
+  return value.trim();
 }
 
-function ensureInactivePlayers(session) {
-  if (!session.inactivePlayers) session.inactivePlayers = [];
-}
-
-function noRoundsStarted(session) {
-  for (let round = 1; round <= session.rounds; round++) {
-    const status = session.roundData?.[round]?.status;
-    if (status != null) return false;
-  }
-  return true;
-}
-
-export function setGameRedirect(fromGameId, toGameId) {
-  if (fromGameId && toGameId) sessionRedirects.set(fromGameId, toGameId);
-}
-
-export function getGameRedirect(gameId) {
-  return sessionRedirects.get(gameId) || null;
-}
-
-export function listSeriesGames(seriesId) {
-  return listSessions()
-    .filter((session) => (session.seriesId || session.gameId) === seriesId)
-    .map((session) => ({
-      seriesId: session.seriesId,
-      gameId: session.gameId,
-      gameIndex: session.gameIndex || 1,
-      name: session.name,
-      createdAt: session.createdAt,
-      resolvedAt: session.resolvedAt || null,
-      archived: !!session.archived,
-      settlementApplied: !!session.settlementApplied,
-    }))
-    .sort((a, b) => a.gameIndex - b.gameIndex);
-}
-
-export function createGame(body = {}) {
-  const {
-    name,
-    players = [],
-    weights,
-    stake = 1,
-    startDealerId = null,
-    startDealerName = null,
-    startDealerIndex = null,
-    seriesId = null,
-    autoAwardEnabled = true,
-  } = body;
-
-  assert(name && Array.isArray(players) && players.length === 4, 400, "Provide game name and exactly 4 players.");
-
-  assert(
-    Array.isArray(weights) &&
-      weights.length === 3 &&
-      weights.every((x) => Number.isFinite(Number(x)) && Number(x) >= 0),
-    400,
-    "weights must be [w2,w3,w4] non-negative numbers (e.g., [1,2,3])."
-  );
-
-  const stakeNum = Number(stake);
-  assert(Number.isFinite(stakeNum) && stakeNum > 0, 400, "stake must be a positive number");
-
-  const newSeriesId = seriesId || generateSeriesId(10);
-  const maxIndex = listSeriesGames(newSeriesId).reduce(
-    (max, game) => Math.max(max, game.gameIndex || 0),
-    0
-  );
-  const gameIndex = maxIndex + 1;
-
-  const gameId = generateGameId(8);
-  const adminKey = generateGameId(12);
-  const normalizedPlayers = players.map((playerName) => ({
-    id: generatePlayerId(),
-    name: String(playerName).trim(),
-  }));
-
-  const session = {
-    seriesId: newSeriesId,
+function newGame(seriesId, gameIndex, source, dealerId, at) {
+  const game = {
+    seriesId,
     gameIndex,
-    gameId,
-    name: String(name).trim(),
+    gameId: String(gameIndex),
+    name: source.name,
     rounds: 5,
-    createdAt: Date.now(),
-    archived: false,
-    players: normalizedPlayers,
-    adminKey,
-    settlementConfig: {
-      weights: weights.map(Number),
-      stake: stakeNum,
-      locked: true,
-    },
-    settings: {
-      autoAwardEnabled: Boolean(autoAwardEnabled),
-    },
+    createdAt: at,
+    players: source.players.map((player) => ({ ...player })),
+    inactivePlayers: source.inactivePlayers.map((player) => ({ ...player })),
+    settlementConfig: { ...source.settlementConfig },
+    settings: { ...source.settings },
+    balanceUnits: { ...source.balanceUnits },
+    roundInfo: {},
+    roundData: {},
+    roundHistory: {},
+    roundEvents: {},
+    highBid: null,
+    settlementApplied: false,
+  };
+  initDealerRotation(game, dealerId);
+  return game;
+}
+
+export function createGame(seriesId, input, at) {
+  const { name, players, weights, stake = 1, startDealerIndex = 0, autoAwardEnabled = true } = input;
+  assert(Array.isArray(players) && players.length === 4, 400, "Provide exactly 4 players.");
+  assert(Array.isArray(weights) && weights.length === 3 && weights.every((weight) => validAmount(weight)),
+    400, "Provide 3 non-negative weights, each up to 10000 with up to 3 decimal places.");
+  assert(validAmount(stake, 0.001), 400, "Stake must be positive, up to 10000 with up to 3 decimal places.");
+  assert(Number.isInteger(startDealerIndex) && startDealerIndex >= 0 && startDealerIndex < 4, 400, "Invalid first dealer.");
+  assert(typeof autoAwardEnabled === "boolean", 400, "Invalid auto-award setting.");
+
+  const roster = players.map((player, index) => ({ id: String(index + 1), name: requireName(player) }));
+  return newGame(seriesId, 1, {
+    name: requireName(name),
+    players: roster,
     inactivePlayers: [],
-    roundInfo: {},
-    roundData: {},
-    perfectCounts: Object.fromEntries(normalizedPlayers.map((p) => [p.id, 0])),
-    payoutLedger: Object.fromEntries(normalizedPlayers.map((p) => [p.id, 0])),
-    highBid: null,
-    settlementApplied: false,
-    lastSettlementResult: undefined,
-    roundHistory: {},
-    roundEvents: {},
-  };
-
-  let resolvedDealerId = null;
-  if (startDealerId && normalizedPlayers.some((p) => p.id === startDealerId)) {
-    resolvedDealerId = startDealerId;
-  } else if (typeof startDealerName === "string" && startDealerName.trim()) {
-    const target = normalizedPlayers.find(
-      (p) => p.name.toLowerCase() === startDealerName.trim().toLowerCase()
-    );
-    if (target) resolvedDealerId = target.id;
-  } else if (Number.isInteger(Number(startDealerIndex))) {
-    const idx = Number(startDealerIndex);
-    if (idx >= 0 && idx < normalizedPlayers.length) resolvedDealerId = normalizedPlayers[idx].id;
-  }
-
-  initDealerRotation(session, resolvedDealerId || normalizedPlayers[0].id);
-
-  setSession(session);
-
-  return {
-    seriesId: session.seriesId,
-    gameIndex: session.gameIndex,
-    gameId,
-    adminKey,
-    players: normalizedPlayers,
-    settlementConfig: session.settlementConfig,
-    roundInfo: session.roundInfo,
-    startDealerId: resolvedDealerId || normalizedPlayers[0].id,
-    settings: session.settings,
-  };
+    settlementConfig: { weights, stake },
+    settings: { autoAwardEnabled },
+    balanceUnits: Object.fromEntries(roster.map(({ id }) => [id, 0])),
+  }, roster[startDealerIndex].id, at);
 }
 
-export function getPublicGame(gameId) {
-  const session = requireSession(gameId);
-  ensureSettings(session);
-  ensureInactivePlayers(session);
-  const { adminKey, ...publicSession } = session;
-  return { ...publicSession, gameId };
+function validateRound(game, round) {
+  assert(Number.isInteger(round) && round >= 1 && round <= game.rounds, 400, "Invalid round.");
 }
 
-export function getSummary(gameId) {
-  const session = requireSession(gameId);
-  ensureSettings(session);
-  ensureInactivePlayers(session);
-  ensurePayoutLedger(session);
-  ensurePerfectCounts(session);
-
-  const response = {
-    seriesId: session.seriesId,
-    gameIndex: session.gameIndex,
-    gameId: session.gameId,
-    name: session.name,
-    players: session.players,
-    payouts: { ...session.payoutLedger },
-    settlementApplied: !!session.settlementApplied,
-    totalsPoints: totalsPoints(session),
-    roundInfo: session.roundInfo,
-    perfectCounts: session.perfectCounts,
-    settings: session.settings,
-    inactivePlayers: session.inactivePlayers,
-  };
-
-  if (session.settlementApplied && session.lastSettlementResult) {
-    response.settlement = session.lastSettlementResult;
-  } else if (allRoundsResolved(session)) {
-    try {
-      response.settlement = { applied: false, ...computeFinalSettlement(session) };
-    } catch {
-      // ignore compute errors until valid
-    }
-  }
-
-  return response;
+function roundValues(game, values, min, label) {
+  assert(isRecord(values) && Object.keys(values).length === game.players.length &&
+    game.players.every(({ id }) => Object.hasOwn(values, id)), 400, `Provide ${label} for all four players.`);
+  assert(Object.values(values).every((value) => Number.isInteger(value) && value >= min && value <= 13),
+    400, `Each value must be an integer between ${min} and 13.`);
 }
 
-function assertAdmin(session, adminKey) {
-  if (adminKey !== session.adminKey) throw new HttpError(403, "Unauthorized");
-}
+function setBids(game, { round, bids }, at) {
+  validateRound(game, round);
+  roundValues(game, bids, 1, "bids");
+  assert(!game.highBid, 409, "Resolve or cancel the pending side game before saving bids.");
+  const bidderIds = game.players.filter(({ id }) => bids[id] >= 8).map(({ id }) => id);
 
-export function setBids(gameId, adminKey, round, bids) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-  if (session.settlementApplied) {
-    throw new HttpError(400, "Game already settled; editing disabled.");
-  }
-  if (session.settlementApplied) {
-    throw new HttpError(400, "Game already settled; editing disabled.");
-  }
-
-  const roundNumber = Number(round);
-  assert(Number.isInteger(roundNumber) && roundNumber >= 1 && roundNumber <= session.rounds, 400, "Invalid round");
-  assert(bids && typeof bids === "object", 400, "bids is required");
-
-  const validIds = new Set(session.players.map((p) => p.id));
-  const incomingIds = Object.keys(bids);
-  assert(
-    incomingIds.length === session.players.length && incomingIds.every((id) => validIds.has(id)),
-    400,
-    "Provide bids for all 4 valid players."
-  );
-
-  const normalized = {};
-  let anyHigh = false;
-  let sum = 0;
-
-  for (const id of incomingIds) {
-    const value = Number(bids[id]);
-    if (!Number.isFinite(value) || !Number.isInteger(value)) {
-      throw new HttpError(400, "Each bid must be an integer");
-    }
-    if (value < 1) throw new HttpError(400, "Each bid must be >= 1");
-    if (value > 13) throw new HttpError(400, "Bid must be <= 13");
-    if (value >= 8) anyHigh = true;
-    normalized[id] = value;
-    sum += value;
-  }
-
-  if (anyHigh) {
-    const bidderIds = incomingIds.filter((id) => normalized[id] >= 8);
-    session.highBid = { active: true, round: roundNumber, bidderIds };
-    pushRoundEvent(session, roundNumber, {
-      type: "HIGH_BID_TRIGGERED",
-      bidderIds: [...bidderIds],
-    });
-    throw new HttpError(409, "High bid triggered", {
-      highBidTriggered: true,
-      bidderIds,
-      round: roundNumber,
-      message:
-        "At least one bid is ≥ 8. Resolve the side game, or edit bids to be < 8.",
-    });
-  }
-
-  if (session.settings.autoAwardEnabled && sum < 10 && roundNumber !== 5) {
-    applyAutoAward(session, roundNumber, normalized);
-    if (session.highBid?.active && session.highBid.round === roundNumber) session.highBid = null;
-    return { autoAwarded: true, roundData: session.roundData[roundNumber] };
-  }
-
-  const roundData = (session.roundData[roundNumber] = session.roundData[roundNumber] || {
-    bids: {},
-    actuals: {},
-    points: {},
-    status: undefined,
-  });
-  roundData.bids = normalized;
-  roundData.actuals = {};
-  roundData.points = {};
-  roundData.status = "BIDS_SET";
-  pushRoundEvent(session, roundNumber, { type: "BIDS_SET", bids: { ...roundData.bids } });
-
-  if (session.highBid?.active && session.highBid.round === roundNumber) session.highBid = null;
-  return { autoAwarded: false, roundData };
-}
-
-export function resolveHighBid(
-  gameId,
-  adminKey,
-  { round, bidderId, winnerId = null, stake, bidderWon } = {}
-) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-
-  const roundNumber = Number(round);
-  assert(Number.isInteger(roundNumber) && roundNumber >= 1 && roundNumber <= session.rounds, 400, "Invalid round");
-
-  if (!session.highBid?.active || session.highBid.round !== roundNumber) {
-    throw new HttpError(400, "No active high bid for this round");
-  }
-
-  const ids = new Set(session.players.map((p) => p.id));
-  if (!ids.has(bidderId)) throw new HttpError(400, "Invalid bidderId");
-  if (!session.highBid.bidderIds.includes(bidderId)) {
-    throw new HttpError(400, "Bidder is not part of the high bid");
-  }
-
-  ensurePayoutLedger(session);
-  const stakeValue = Number(stake || session.settlementConfig?.stake || 1);
-  assert(Number.isFinite(stakeValue) && stakeValue > 0, 400, "Invalid stake value");
-
-  const opponents = session.players.filter((player) => player.id !== bidderId);
-  const opponentIds = opponents.map((player) => player.id);
-  const bidderWins = bidderWon ?? winnerId === bidderId;
-
-  if (bidderWins) {
-    const payout = stakeValue * opponents.length;
-    for (const player of session.players) {
-      if (player.id === bidderId) session.payoutLedger[player.id] += payout;
-      else session.payoutLedger[player.id] -= stakeValue;
-    }
-    pushRoundEvent(session, roundNumber, {
-      type: "HIGH_BID_RESOLVED",
-      bidderId,
-      stake: stakeValue,
-      outcome: "WIN",
-      opponentIds,
-    });
+  // A saved 8+ call replaces the regular entry and opens a side game.
+  if (bidderIds.length) {
+    delete game.roundData[round];
+    delete game.roundHistory[round];
+    game.highBid = { active: true, round, bidderIds };
+    pushRoundEvent(game, round, { type: "HIGH_BID_TRIGGERED", bids, bidderIds }, at);
+  } else if (game.settings.autoAwardEnabled && round < game.rounds &&
+    Object.values(bids).reduce((sum, value) => sum + value, 0) < 10) {
+    applyAutoAward(game, round, bids, at);
   } else {
-    const payout = stakeValue * opponents.length;
-    for (const player of session.players) {
-      if (player.id === bidderId) session.payoutLedger[player.id] -= payout;
-      else session.payoutLedger[player.id] += stakeValue;
+    game.roundData[round] = { bids, actuals: {}, points: {}, status: "BIDS_SET" };
+    delete game.roundHistory[round];
+    pushRoundEvent(game, round, { type: "BIDS_SET", bids }, at);
+  }
+}
+
+function setActuals(game, { round, actuals }, at) {
+  validateRound(game, round);
+  const data = game.roundData[round];
+  assert(game.highBid?.round !== round && (data?.status === "BIDS_SET" || data?.status === "PLAYED") &&
+    game.players.every(({ id }) => Number.isInteger(data.bids[id]) && data.bids[id] >= 1 && data.bids[id] < 8),
+  409, "Save four regular bids before saving actuals.");
+  roundValues(game, actuals, 0, "actuals");
+  assert(Object.values(actuals).reduce((sum, value) => sum + value, 0) === 13, 400, "Actuals must sum to 13.");
+  if (data.status === "PLAYED" && game.players.every(({ id }) => data.actuals[id] === actuals[id])) return;
+  data.actuals = actuals;
+  scorePlayedRound(game, round, at);
+}
+
+function closeHighBid(game, payload, at, canceled) {
+  const { round, bidderId, bidderWon, stake = game.settlementConfig.stake } = payload;
+  validateRound(game, round);
+  assert(game.highBid?.round === round, 409, "No pending side game in this round.");
+  if (canceled) {
+    pushRoundEvent(game, round, { type: "HIGH_BID_CANCELED" }, at);
+  } else {
+    assert(game.highBid.bidderIds.includes(bidderId), 400, "Select a player who bid 8 or more.");
+    assert(typeof bidderWon === "boolean", 400, "Choose whether the bidder won.");
+    assert(validAmount(stake, 0.001), 400, "Stake must be positive, up to 10000 with up to 3 decimal places.");
+    const opponentIds = game.players.filter(({ id }) => id !== bidderId).map(({ id }) => id);
+    const units = Math.round(stake * 1_000_000);
+    for (const opponent of opponentIds) {
+      if (bidderWon) transfer(game, opponent, bidderId, units);
+      else transfer(game, bidderId, opponent, units);
     }
-    pushRoundEvent(session, roundNumber, {
-      type: "HIGH_BID_RESOLVED",
-      bidderId,
-      stake: stakeValue,
-      outcome: "LOSS",
-      opponentIds,
-    });
+    pushRoundEvent(game, round, {
+      type: "HIGH_BID_RESOLVED", bidderId, stake, outcome: bidderWon ? "WIN" : "LOSS", opponentIds,
+    }, at);
   }
-
-  session.highBid = null;
-  return { ok: true, payoutLedger: session.payoutLedger };
+  game.highBid = null;
 }
 
-export function cancelHighBid(gameId, adminKey, round) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-  if (session.settlementApplied) {
-    throw new HttpError(400, "Game already settled; editing disabled.");
-  }
+function reorderPlayers(game, { newOrder, startDealerId }) {
+  const roster = new Map(game.players.map((player) => [player.id, player]));
+  assert(Array.isArray(newOrder) && newOrder.length === roster.size &&
+    new Set(newOrder).size === roster.size && newOrder.every((id) => roster.has(id)),
+  400, "Provide all four player IDs in seating order.");
+  assert(roster.has(startDealerId), 400, "Choose a dealer from the roster.");
 
-  const roundNumber = Number(round);
-  assert(Number.isInteger(roundNumber) && roundNumber >= 1 && roundNumber <= session.rounds, 400, "Invalid round");
-
-  if (!session.highBid?.active || session.highBid.round !== roundNumber) {
-    throw new HttpError(400, "No active high bid for this round");
-  }
-
-  const roundData = (session.roundData[roundNumber] = session.roundData[roundNumber] || {
-    bids: {},
-    actuals: {},
-    points: {},
-    status: undefined,
-  });
-  delete roundData.locked;
-
-  roundData.bids = {};
-  roundData.status = undefined;
-  session.highBid = null;
-
-  pushRoundEvent(session, roundNumber, { type: "HIGH_BID_CANCELED" });
-
-  return { ok: true, roundData };
+  game.players = newOrder.map((id) => roster.get(id));
+  // Freeze the rotation through the latest round anyone has recorded.
+  const firstOpen = Math.max(0, ...Object.keys(game.roundEvents).map(Number)) + 1;
+  initDealerRotation(game, startDealerId, firstOpen);
 }
 
-export function setActuals(gameId, adminKey, round, actuals) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-  if (session.settlementApplied) {
-    throw new HttpError(400, "Game already settled; editing disabled.");
-  }
-
-  const roundNumber = Number(round);
-  assert(Number.isInteger(roundNumber) && roundNumber >= 1 && roundNumber <= session.rounds, 400, "Invalid round");
-
-  const roundData = session.roundData[roundNumber];
-  if (!roundData || !roundData.bids) throw new HttpError(400, "Set bids before actuals");
-  delete roundData.locked;
-
-  const validIds = new Set(session.players.map((p) => p.id));
-  const incomingIds = Object.keys(actuals || {});
-  assert(
-    incomingIds.length === session.players.length && incomingIds.every((id) => validIds.has(id)),
-    400,
-    "Provide actuals for all 4 valid players."
+function canSubstitute(game) {
+  return !game.highBid && !Object.values(game.roundEvents).some((events) =>
+    events.some(({ type }) => ["BIDS_SET", "PLAYED", "AUTO_AWARDED"].includes(type))
   );
-
-  let sum = 0;
-  roundData.actuals = {};
-
-  for (const id of incomingIds) {
-    const value = Number(actuals[id]);
-    if (!Number.isFinite(value) || !Number.isInteger(value) || value < 0 || value > 13) {
-      throw new HttpError(400, "Each actual must be an integer between 0 and 13");
-    }
-    roundData.actuals[id] = value;
-    sum += value;
-  }
-
-  if (sum !== 13) throw new HttpError(400, "Sum of actuals must be 13");
-
-  scorePlayedRound(session, roundNumber);
-  return { ok: true, roundData: session.roundData[roundNumber] };
 }
 
-export function resolveGame(gameId, adminKey) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-  if (!allRoundsResolved(session)) throw new HttpError(400, "All 5 rounds must be resolved first.");
-  if (session.settlementApplied) throw new HttpError(400, "Settlement already applied.");
+function substitutePlayer(game, { outgoingPlayerId, incomingPlayerId, incomingName }) {
+  assert(canSubstitute(game), 409,
+    "Substitutions are available before play, with no pending side game.");
+  const index = game.players.findIndex(({ id }) => id === outgoingPlayerId);
+  assert(index !== -1, 400, "Outgoing player is not seated.");
+  assert((incomingPlayerId === undefined) !== (incomingName === undefined), 400,
+    "Select a bench player or enter a new name.");
+  let incoming;
+  if (incomingPlayerId !== undefined) {
+    const benchIndex = game.inactivePlayers.findIndex(({ id }) => id === incomingPlayerId);
+    assert(benchIndex !== -1, 400, "Incoming player is not on the bench.");
+    [incoming] = game.inactivePlayers.splice(benchIndex, 1);
+  } else {
+    const name = requireName(incomingName);
+    const id = String(game.players.length + game.inactivePlayers.length + 1);
+    incoming = { id, name };
+    game.balanceUnits[id] = 0;
+  }
 
-  const result = computeFinalSettlement(session);
-  ensurePayoutLedger(session);
+  game.inactivePlayers.push(game.players[index]);
+  game.players[index] = incoming;
+  const dealerId = game.roundInfo[1].dealerId;
+  initDealerRotation(game, dealerId === outgoingPlayerId ? incoming.id : dealerId);
+}
+
+function settle(game, at) {
+  if (game.settlementApplied) return;
+  assert(!game.highBid && allRoundsResolved(game), 409, "Complete all five rounds before settling.");
+  const result = computeFinalSettlement(game);
   for (const payout of result.payouts) {
-    session.payoutLedger[payout.fromPlayerId] -= payout.amount;
-    session.payoutLedger[payout.toPlayerId] += payout.amount;
+    transfer(game, payout.fromPlayerId, payout.toPlayerId, Math.round(payout.amount * 1_000_000));
   }
-  session.settlementApplied = true;
-  session.resolvedAt = Date.now();
-  session.lastSettlementResult = {
-    applied: true,
-    appliedAt: session.resolvedAt,
-    ...result,
-  };
-
-  return { ok: true, payoutLedger: { ...session.payoutLedger } };
+  game.settlementApplied = true;
+  game.resolvedAt = at;
+  game.lastSettlementResult = { applied: true, appliedAt: at, ...result };
 }
 
-export function startNextGame(gameId, adminKey) {
-  const previous = requireSession(gameId);
-  assertAdmin(previous, adminKey);
-  ensureSettings(previous);
-  ensureInactivePlayers(previous);
-  if (!previous.settlementApplied) throw new HttpError(400, "Resolve game before starting a new one.");
+const actions = {
+  "set-bids": setBids,
+  "set-actuals": setActuals,
+  "cancel-highbid": (game, payload, at) => closeHighBid(game, payload, at, true),
+  "resolve-highbid": (game, payload, at) => closeHighBid(game, payload, at, false),
+  "reorder-players": reorderPlayers,
+  substitute: substitutePlayer,
+  settings(game, { autoAwardEnabled }) {
+    assert(typeof autoAwardEnabled === "boolean", 400, "Invalid auto-award setting.");
+    game.settings.autoAwardEnabled = autoAwardEnabled;
+  },
+  "resolve-game": (game, _, at) => settle(game, at),
+};
 
-  const newGameId = generateGameId(8);
-  const newAdminKey = generateGameId(12);
-  const seriesId = previous.seriesId || previous.gameId;
-  const gameIndex = (previous.gameIndex || 1) + 1;
-
-  const nextSession = {
-    seriesId,
-    gameIndex,
-    gameId: newGameId,
-    name: previous.name,
-    rounds: 5,
-    createdAt: Date.now(),
-    archived: false,
-    players: previous.players.map((player) => ({ ...player })),
-    adminKey: newAdminKey,
-    settlementConfig: { ...previous.settlementConfig },
-    settings: { ...previous.settings },
-    inactivePlayers: [...(previous.inactivePlayers || [])],
-    roundInfo: {},
-    roundData: {},
-    perfectCounts: Object.fromEntries(previous.players.map((p) => [p.id, 0])),
-    payoutLedger: { ...previous.payoutLedger },
-    highBid: null,
-    settlementApplied: false,
-    lastSettlementResult: undefined,
-    roundHistory: {},
-    roundEvents: {},
-  };
-
-  let startDealerId = nextSession.players[0].id;
-  const ranking = previous.lastSettlementResult?.ranking;
-  if (Array.isArray(ranking) && ranking.length === 4) {
-    const loser = ranking[ranking.length - 1];
-    if (loser?.id) startDealerId = loser.id;
+export function applyCommand(game, action, payload, at) {
+  assert(isRecord(payload), 400, "Provide a command payload.");
+  if (action === "next-game") {
+    assert(game.settlementApplied, 409, "Settle the game before starting the next one.");
+    const dealer = game.lastSettlementResult.ranking.at(-1);
+    return newGame(game.seriesId, game.gameIndex + 1, game, dealer.id, at);
   }
+  assert(Object.hasOwn(actions, action), 400, "Unknown ledger command.");
+  assert(!game.settlementApplied || action === "resolve-game", 409, "The game has already been settled.");
+  actions[action](game, payload, at);
+  return game;
+}
 
-  initDealerRotation(nextSession, startDealerId);
-
-  previous.archived = true;
-  setGameRedirect(gameId, newGameId);
-  setSession(nextSession);
-
+export function publicGame(game) {
+  const { balanceUnits: _, roundEvents, roundHistory: _history, highBid, ...view } = game;
+  const pending = highBid && { ...highBid, attempt: roundEvents[highBid.round].length };
   return {
-    seriesId,
-    gameIndex,
-    gameId: newGameId,
-    adminKey: newAdminKey,
-    roundInfo: nextSession.roundInfo,
+    ...view,
+    highBid: pending,
+    recordedRounds: Object.keys(roundEvents).map(Number),
+    canSubstitute: canSubstitute(game),
   };
 }
 
-export function reorderPlayers(gameId, adminKey, newOrder, startDealerId = null) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-  ensureInactivePlayers(session);
-  if (session.settlementApplied) {
-    throw new HttpError(400, "Game already settled; editing disabled.");
-  }
-
-  assert(Array.isArray(newOrder) && newOrder.length === session.players.length, 400, "newOrder must include all 4 player ids");
-
-  const idSet = new Set(newOrder);
-  const validIds = new Set(session.players.map((p) => p.id));
-  assert(idSet.size === validIds.size && [...idSet].every((id) => validIds.has(id)), 400, "Invalid player IDs");
-
-  session.players = newOrder.map((id) => session.players.find((p) => p.id === id));
-
-  const dealerId = startDealerId && session.players.some((p) => p.id === startDealerId)
-    ? startDealerId
-    : session.players[0].id;
-
-  initDealerRotation(session, dealerId);
-
-  return { ok: true, players: session.players, roundInfo: session.roundInfo };
-}
-
-export function substitutePlayer(
-  gameId,
-  adminKey,
-  { outgoingPlayerId, incomingPlayerId = null, incomingName = null } = {}
-) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-  ensureInactivePlayers(session);
-
-  if (session.settlementApplied) {
-    throw new HttpError(400, "Game already settled; editing disabled.");
-  }
-
-  if (!noRoundsStarted(session)) {
-    throw new HttpError(400, "Substitutions are allowed before the first round starts.");
-  }
-
-  if (!outgoingPlayerId) {
-    throw new HttpError(400, "Provide outgoingPlayerId to substitute");
-  }
-
-  const replaceIndex = session.players.findIndex((player) => player.id === outgoingPlayerId);
-  if (replaceIndex === -1) {
-    throw new HttpError(400, "Outgoing player not found in active roster");
-  }
-
-  let incomingPlayer = null;
-
-  if (incomingPlayerId) {
-    const benchIndex = session.inactivePlayers.findIndex((player) => player.id === incomingPlayerId);
-    if (benchIndex === -1) {
-      throw new HttpError(400, "Incoming player not found in bench");
-    }
-    incomingPlayer = session.inactivePlayers.splice(benchIndex, 1)[0];
-  } else {
-    const trimmed = (incomingName || "").trim();
-    if (!trimmed) throw new HttpError(400, "Enter a name for the new player");
-    incomingPlayer = {
-      id: generatePlayerId(),
-      name: trimmed,
-    };
-  }
-
-  const outgoingPlayer = session.players[replaceIndex];
-
-  // Add outgoing to bench if not already present
-  if (!session.inactivePlayers.some((player) => player.id === outgoingPlayer.id)) {
-    session.inactivePlayers.push({ ...outgoingPlayer });
-  }
-
-  // Replace active roster slot
-  session.players[replaceIndex] = { ...incomingPlayer };
-
-  // Ensure stats entries exist for incoming player
-  ensurePayoutLedger(session);
-  ensurePerfectCounts(session);
-  if (!(incomingPlayer.id in session.payoutLedger)) {
-    session.payoutLedger[incomingPlayer.id] = 0;
-  }
-  if (!(incomingPlayer.id in session.perfectCounts)) {
-    session.perfectCounts[incomingPlayer.id] = 0;
-  }
-
-  // Rebuild dealer rotation preserving existing first dealer when possible
-  const desiredDealer = session.roundInfo?.[1]?.dealerId;
-  const dealerInRoster = desiredDealer && session.players.some((player) => player.id === desiredDealer);
-  initDealerRotation(session, dealerInRoster ? desiredDealer : session.players[0].id);
-
+export function getSummary(game) {
+  const payoutEntries = Object.entries(game.balanceUnits).map(([id, units]) => [id, balanceFromUnits(units)]);
   return {
-    ok: true,
-    players: session.players,
-    inactivePlayers: session.inactivePlayers,
-    roundInfo: session.roundInfo,
+    players: game.players,
+    inactivePlayers: game.inactivePlayers,
+    settings: game.settings,
+    payouts: Object.fromEntries(payoutEntries),
+    settlementApplied: game.settlementApplied,
+    settlement: game.lastSettlementResult,
+    perfectCounts: perfectCounts(game),
+    ...pointTotals(game),
   };
 }
 
-export function setBidders(gameId, adminKey, round, bidderOrder) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-
-  const roundNumber = Number(round);
-  assert(Number.isInteger(roundNumber) && roundNumber >= 1 && roundNumber <= session.rounds, 400, "Invalid round");
-
-  const validIds = new Set(session.players.map((p) => p.id));
-  assert(Array.isArray(bidderOrder) && bidderOrder.length === session.players.length, 400, "bidderOrder must include all 4 players");
-  assert(bidderOrder.every((id) => validIds.has(id)), 400, "Invalid bidderOrder ids");
-
-  session.roundInfo[roundNumber] = session.roundInfo[roundNumber] || {};
-  session.roundInfo[roundNumber].bidderOrder = bidderOrder;
-  session.roundInfo[roundNumber].dealerId = bidderOrder[bidderOrder.length - 1];
-
-  return { ok: true, roundInfo: session.roundInfo[roundNumber] };
-}
-
-export function getSeriesByGame(gameId) {
-  const session = requireSession(gameId);
-  ensureSettings(session);
-  const seriesId = session.seriesId || session.gameId;
-  return { seriesId, currentGameId: session.gameId, games: listSeriesGames(seriesId) };
-}
-
-export function getSeriesById(seriesId) {
-  const games = listSeriesGames(seriesId);
-  if (!games.length) throw new HttpError(404, "Series not found");
-  return { seriesId, games };
-}
-
-export function getGameHistory(gameId) {
-  const session = requireSession(gameId, { allowArchived: true });
-  ensureSettings(session);
-  if (!session.settlementApplied) {
-    throw new HttpError(403, "HISTORY_LOCKED_UNTIL_GAME_RESOLVED", {
-      message: "Game history becomes available after the game is resolved.",
-    });
-  }
-
-  return {
-    seriesId: session.seriesId,
-    gameIndex: session.gameIndex,
-    gameId: session.gameId,
-    name: session.name,
-    players: session.players,
-    roundHistory: session.roundHistory || {},
-    roundEvents: session.roundEvents || {},
-    resolvedAt: session.resolvedAt || null,
-  };
-}
-
-export function getHighBidState(gameId) {
-  const session = requireSession(gameId);
-  ensureSettings(session);
-  return session.highBid || null;
-}
-
-export function updateGameSettings(gameId, adminKey, updates = {}) {
-  const session = requireSession(gameId);
-  assertAdmin(session, adminKey);
-  ensureSettings(session);
-
-  if (Object.prototype.hasOwnProperty.call(updates, "autoAwardEnabled")) {
-    session.settings.autoAwardEnabled = Boolean(updates.autoAwardEnabled);
-  }
-
-  return { ok: true, settings: { ...session.settings } };
+export function historyFor(game) {
+  assert(game.settlementApplied, 404, "Settled game not found.");
+  const { gameId, name, players, roundHistory, roundEvents, resolvedAt, lastSettlementResult } = game;
+  const benchNames = Object.fromEntries(game.inactivePlayers.map(({ id, name }) => [id, name]));
+  return { gameId, name, players, benchNames, roundHistory, roundEvents, resolvedAt, settlement: lastSettlementResult };
 }

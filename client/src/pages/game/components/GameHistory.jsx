@@ -22,17 +22,8 @@ export default function GameHistory({
       .sort((a, b) => a.round - b.round);
   }, [history]);
 
-  const totalsByPlayer = useMemo(() => {
-    if (!roundSummaries.length) return null;
-    const totals = {};
-    for (const { snapshot } of roundSummaries) {
-      for (const player of players) {
-        const value = Number(snapshot.points?.[player.id] ?? 0);
-        totals[player.id] = (totals[player.id] || 0) + value;
-      }
-    }
-    return totals;
-  }, [roundSummaries, players]);
+  const standings = history?.settlement?.ranking || [];
+  const names = Object.fromEntries(players.map(({ id, name }) => [id, name]));
 
   return (
     <Card accent="#c7d2fe" bg="#eef2ff">
@@ -47,19 +38,20 @@ export default function GameHistory({
       >
         <h3 style={{ margin: 0 }}>Game History</h3>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <label>Game</label>
+          <label htmlFor="history-game">Game</label>
           <select
+            id="history-game"
             value={selectedGameId || ""}
             onChange={(event) => onSelectGame(event.target.value || null)}
             style={{ ...inputStyle, width: 220 }}
             disabled={loading || !series}
           >
-            {!series && <option value="">Loading…</option>}
+            {!selectedGameId && <option value="">Select a settled game</option>}
             {series &&
               series.games.map((game) => (
                 <option
                   key={game.gameId}
-                  value={game.settlementApplied ? game.gameId : ""}
+                  value={game.gameId}
                   disabled={!game.settlementApplied}
                 >
                   {`Game ${game.gameIndex} • ${formatTs(game.createdAt)}`}
@@ -124,9 +116,14 @@ export default function GameHistory({
                 <h4 style={{ margin: "0 0 8px" }}>
                   Round {round}
                   <span style={{ fontSize: 13, color: "#6b7280", marginLeft: 8 }}>
-                    {snapshot.status || "Pending"}
+                    {snapshot.status} · Dealer {names[snapshot.dealerId]}
                   </span>
                 </h4>
+                {(history.roundEvents?.[round] || []).filter((event) => event.type === "HIGH_BID_RESOLVED").map((event, index) => (
+                  <p key={index}>
+                    Side game: {names[event.bidderId] || history.benchNames?.[event.bidderId]} {event.outcome === "WIN" ? "won" : "lost"} at {event.stake} per opponent.
+                  </p>
+                ))}
                 <table style={tableStyle}>
                   <thead>
                     <tr>
@@ -155,7 +152,7 @@ export default function GameHistory({
             );
           })}
 
-          {totalsByPlayer && (
+          {standings.length > 0 && (
             <div style={{ marginTop: 18 }}>
               <h4 style={{ margin: "0 0 8px" }}>Final Totals</h4>
               <table style={tableStyle}>
@@ -167,20 +164,13 @@ export default function GameHistory({
                   </tr>
                 </thead>
                 <tbody>
-                  {players
-                    .map((player) => ({
-                      id: player.id,
-                      name: player.name,
-                      points: totalsByPlayer[player.id] || 0,
-                    }))
-                    .sort((a, b) => b.points - a.points)
-                    .map((row, index) => (
-                      <tr key={row.id}>
-                        <td style={tdStyle}>{index + 1}</td>
-                        <td style={{ ...tdStyle, textAlign: "left" }}>{row.name}</td>
-                        <td style={tdStyle}>{row.points.toFixed(1)}</td>
-                      </tr>
-                    ))}
+                  {standings.map((player, index) => (
+                    <tr key={player.id}>
+                      <td style={tdStyle}>{index + 1}</td>
+                      <td style={{ ...tdStyle, textAlign: "left" }}>{player.name}</td>
+                      <td style={tdStyle}>{player.total.toFixed(1)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>

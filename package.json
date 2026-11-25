@@ -1,0 +1,27 @@
+{
+  "name": "callbreak-ledger",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": "24.22.3"
+  },
+  "workspaces": [
+    "client"
+  ],
+  "scripts": {
+    "dev": "npm run build && wrangler dev --env \"\" --local --persist-to .wrangler/ledger-dev",
+    "lint": "npm run lint -w client && tsc --noEmit",
+    "test": "npm run build && node --test test/scoring.test.js test/worker.test.js",
+    "test:browser": "npm run build && playwright test",
+    "build": "npm run build -w client",
+    "deploy:check": "wrangler deploy --dry-run",
+    "deploy": "npm run lint && npm test && npm run test:browser && wrangler deploy --env \"\""
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261125.1",
+    "@playwright/test": "1.65.1",
+    "typescript": "7.0.2",
+    "wrangler": "4.168.0"
+  }
+}

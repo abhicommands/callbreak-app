@@ -21,7 +21,7 @@ export default function GameHeader({
       <div>
         <h1 style={{ margin: 0 }}>{title || "Game"}</h1>
         <div style={{ color: "#4b5563", fontSize: 14 }}>
-          Game ID: <code>{gameId}</code>
+          Game {gameId}
         </div>
       </div>
       <div style={{ textAlign: "right", color: "#4b5563", fontSize: 14 }}>

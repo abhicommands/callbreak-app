@@ -1,5 +1,5 @@
 import React from "react";
-import { btnStyle, lightBtnStyle } from "./ui.js";
+import { btnStyle } from "./ui.js";
 
 export default function AdminActions({
   isAdmin,
@@ -35,13 +35,6 @@ export default function AdminActions({
           Start Next Game (carry payouts)
         </button>
       )}
-      <button
-        style={{ ...lightBtnStyle, cursor: "default" }}
-        disabled
-        title="Changes broadcast in realtime — everyone stays in sync."
-      >
-        Live Sync Enabled
-      </button>
     </div>
   );
 }

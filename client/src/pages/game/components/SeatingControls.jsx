@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { Card, btnStyle, lightBtnStyle, inputStyle } from "./ui.js";
 
 export default function SeatingControls({
@@ -20,13 +20,20 @@ export default function SeatingControls({
   const [subSelection, setSubSelection] = useState("NEW");
   const [subName, setSubName] = useState("");
 
-  useEffect(() => {
+  const [source, setSource] = useState({ players, dealerId: currentDealerId });
+
+  function resetDraft() {
     setOrder(players);
     setDealerId(currentDealerId);
     setSubSeatIndex(0);
     setSubSelection("NEW");
     setSubName("");
-  }, [players, currentDealerId, isEditing]);
+  }
+
+  if (source.players !== players || source.dealerId !== currentDealerId) {
+    setSource({ players, dealerId: currentDealerId });
+    resetDraft();
+  }
 
   const movePlayer = (index, delta) => {
     const next = [...order];
@@ -63,7 +70,7 @@ export default function SeatingControls({
         <div>
           <h3 style={{ margin: 0 }}>Seating &amp; Dealer</h3>
           <div style={{ fontSize: 13, color: "#4b5563" }}>
-            Adjust player order or choose a new dealer between games.
+            Seating and dealer changes apply to upcoming rounds.
           </div>
         </div>
         {isAdmin && (
@@ -71,6 +78,7 @@ export default function SeatingControls({
             style={isEditing ? lightBtnStyle : btnStyle}
             onClick={() => {
               if (isEditing && onClearError) onClearError();
+              resetDraft();
               setIsEditing((value) => !value);
             }}
             disabled={saving}
@@ -134,7 +142,7 @@ export default function SeatingControls({
               flexWrap: "wrap",
             }}
           >
-            <label>Quick set dealer</label>
+            <label>Next dealer</label>
             <select
               value={dealerId || ""}
               onChange={(event) => setDealerId(event.target.value)}
@@ -161,11 +169,7 @@ export default function SeatingControls({
               style={lightBtnStyle}
               disabled={saving}
               onClick={() => {
-                setOrder(players);
-                setDealerId(currentDealerId);
-                setSubSeatIndex(0);
-                setSubSelection("NEW");
-                setSubName("");
+                resetDraft();
                 if (onClearError) onClearError();
               }}
             >

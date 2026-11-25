@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, tableStyle, thStyle, tdStyle } from "./ui.js";
+import { Card, formatBalance, tableStyle, thStyle, tdStyle } from "./ui.js";
 
 export default function SettlementCard({ summary }) {
   const settlement = summary?.settlement;
@@ -42,8 +42,8 @@ export default function SettlementCard({ summary }) {
               <td style={tdStyle}>
                 <b>
                   {row.delta >= 0
-                    ? `+${row.delta.toFixed(1)}`
-                    : row.delta.toFixed(1)}
+                    ? `+${formatBalance(row.delta)}`
+                    : formatBalance(row.delta)}
                 </b>
               </td>
             </tr>

@@ -1,168 +1,50 @@
-// src/api.js
-const API_BASE = normalizeBase(import.meta.env.VITE_API_BASE);
-const BASE = API_BASE;
+export const ledgerPath = (id) => `/api/ledger/${id}`;
+export const editorStorageKey = (id) => `callbreak:editor:${id}`;
+export const recoveryStorageKey = (id) => `callbreak:recovery:${id}`;
 
-function normalizeBase(base) {
-  const fallback = "/api";
-  if (!base) return fallback;
-  const trimmed = String(base).trim();
-  if (!trimmed) return fallback;
-  return trimmed.replace(/\/+$/, "") || fallback;
+export function randomHex(length) {
+  return Array.from(crypto.getRandomValues(new Uint8Array(length)),
+    (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-async function jsonOrThrow(res) {
-  const txt = await res.text();
-  let data = {};
-  try {
-    data = txt ? JSON.parse(txt) : {};
-  } catch {
-    data = { error: txt };
+export async function request(path, { token, body, key } = {}) {
+  const headers = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (key) headers["Idempotency-Key"] = key;
+  if (body) headers["Content-Type"] = "application/json";
+  const options = { method: body ? "POST" : "GET", headers, body: body && JSON.stringify(body) };
+  let response;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      response = await fetch(path, options);
+      if (!key || ![502, 503, 504].includes(response.status) || attempt === 1) break;
+    } catch (error) {
+      if (!key || attempt === 1) throw error;
+    }
   }
-  if (!res.ok) {
-    const err = new Error(
-      data?.error || res.statusText || `HTTP ${res.status}`
-    );
-    err.status = res.status;
-    err.data = data;
-    throw err;
+  const data = await response.json();
+  if (!response.ok) {
+    const error = new Error(data.error || "Ledger request failed.");
+    error.status = response.status;
+    error.code = data.code;
+    throw error;
   }
   return data;
 }
 
-// ---------- Core game ----------
-export async function createGame(body) {
-  const r = await fetch(`${BASE}/create-game`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
+export function setupLedger(payload, action) {
+  const seriesId = randomHex(16);
+  const editorKey = randomHex(32);
+  const recoveryKey = randomHex(32);
+  const key = crypto.randomUUID();
+  return {
+    seriesId,
+    editorKey,
+    recoveryKey,
+    submit: () => request(`${ledgerPath(seriesId)}/setup`, {
+      token: editorKey,
+      key,
+      body: { expectedRevision: 0, action, payload, recoveryKey },
+    }),
+  };
 }
-
-export async function getGame(gameId) {
-  const r = await fetch(`${BASE}/game/${gameId}`);
-  return jsonOrThrow(r);
-}
-
-export async function getSummary(gameId) {
-  const r = await fetch(`${BASE}/game/${gameId}/summary`);
-  return jsonOrThrow(r);
-}
-
-// ---------- Admin actions (new set) ----------
-export async function setBids(
-  gameId,
-  body /* { adminKey, round, bids:{[pid]:number} } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/set-bids`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function resolveHighBid(
-  gameId,
-  body /* { adminKey, round, bidderId, stake, bidderWon } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/resolve-highbid`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function setActuals(
-  gameId,
-  body /* { adminKey, round, actuals:{[pid]:number} } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/set-actuals`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function cancelHighBid(
-  gameId,
-  body /* { adminKey, round } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/cancel-highbid`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function resolveGame(gameId, body /* { adminKey } */) {
-  const r = await fetch(`${BASE}/game/${gameId}/resolve-game`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function nextGame(gameId, body /* { adminKey } */) {
-  const r = await fetch(`${BASE}/game/${gameId}/next-game`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-// ---------- Seating / settings ----------
-export async function reorderPlayers(
-  gameId,
-  body /* { adminKey, newOrder:[pid,pid,pid,pid] } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/reorder-players`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function setBidders(
-  gameId,
-  body /* { adminKey, round, bidderOrder:[pid,...](dealer last) } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/set-bidders`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function updateGameSettings(
-  gameId,
-  body /* { adminKey, autoAwardEnabled } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/settings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export async function substitutePlayer(
-  gameId,
-  body /* { adminKey, outgoingPlayerId, incomingPlayerId?, incomingName? } */
-) {
-  const r = await fetch(`${BASE}/game/${gameId}/substitute`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  return jsonOrThrow(r);
-}
-
-export { API_BASE };

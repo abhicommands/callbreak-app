@@ -34,3 +34,56 @@ h2,
 h3 {
   letter-spacing: 0.2px;
 }
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+td {
+  overflow-wrap: anywhere;
+}
+
+.ledger-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(290px, 1fr);
+  gap: 16px;
+}
+
+.ledger-sidebar {
+  align-self: start;
+}
+
+.ledger-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.ledger-recovery {
+  margin-top: 12px;
+  max-width: 38rem;
+}
+
+.ledger-recovery input {
+  margin: 6px 0 8px;
+}
+
+@media (max-width: 760px) {
+  .ledger-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ledger-sidebar {
+    grid-row: 1;
+  }
+
+  input, select {
+    max-width: 100%;
+    font-size: 16px !important;
+  }
+
+  th, td {
+    padding-inline: 4px !important;
+  }
+}
