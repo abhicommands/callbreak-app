@@ -25,11 +25,11 @@ export default function RoundCard({
   isEditingActuals,
   autoAwardEnabled,
   highBid,
+  bidLocked,
   selectedBidder,
   onSelectBidder,
   stakeText,
   onStakeTextChange,
-  highBidError,
   onResolveHighBid,
   onCancelHighBid,
   onBidInput,
@@ -57,11 +57,12 @@ export default function RoundCard({
   const dealerId = info?.dealerId || bidderOrder[bidderOrder.length - 1];
   const firstBidderId = bidderOrder[0];
 
-  const canEditActuals =
-    roundData.status !== "AUTO_AWARDED" &&
-    (isEditingActuals ||
-      roundData.status === "BIDS_SET" ||
-      roundData.status === "PLAYED");
+  const hasRegularBids = roundData.status === "BIDS_SET" || roundData.status === "PLAYED";
+  const canEditActuals = !highBid && hasRegularBids && isEditingActuals;
+
+  const validEntry = (value, minimum) =>
+    value != null && String(value).trim() !== "" && Number.isInteger(Number(value)) &&
+    Number(value) >= minimum && Number(value) <= 13;
 
   const bidTotalLive = useMemo(() => {
     let total = 0;
@@ -87,7 +88,7 @@ export default function RoundCard({
   const allBidsFilled = useMemo(
     () =>
       players.every((player) =>
-        Number.isFinite(Number(bidInputs[player.id] ?? ""))
+        validEntry(bidInputs[player.id], 1)
       ),
     [players, bidInputs]
   );
@@ -101,7 +102,7 @@ export default function RoundCard({
   const allActualsFilled = useMemo(
     () =>
       players.every((player) =>
-        Number.isFinite(Number(actualInputs[player.id] ?? ""))
+        validEntry(actualInputs[player.id], 0)
       ),
     [players, actualInputs]
   );
@@ -110,7 +111,7 @@ export default function RoundCard({
   const highBidActive = Boolean(highBid?.active);
 
   return (
-    <Card>
+    <Card as="section" aria-label={`Round ${roundNumber}`}>
       <div
         style={{
           display: "flex",
@@ -136,7 +137,6 @@ export default function RoundCard({
             setSelectedBidder={onSelectBidder}
             stakeText={stakeText}
             setStakeText={onStakeTextChange}
-            error={highBidError}
             onResolve={onResolveHighBid}
             onCancel={onCancelHighBid}
           />
@@ -153,7 +153,7 @@ export default function RoundCard({
           </tr>
         </thead>
         <tbody>
-          {players.map((player) => (
+          {bidderOrder.map((id) => players.find((player) => player.id === id)).map((player) => (
             <tr key={player.id}>
               <td style={{ ...tdStyle, textAlign: "left" }}>
                 {player.name}
@@ -166,6 +166,8 @@ export default function RoundCard({
                 {isAdmin && isEditingBids ? (
                   <input
                     type="number"
+                    inputMode="numeric"
+                    aria-label={`Bid for ${player.name}`}
                     min={1}
                     max={13}
                     step={1}
@@ -186,6 +188,8 @@ export default function RoundCard({
                 {isAdmin && canEditActuals ? (
                   <input
                     type="number"
+                    inputMode="numeric"
+                    aria-label={`Actual for ${player.name}`}
                     min={0}
                     max={13}
                     step={1}
@@ -223,16 +227,16 @@ export default function RoundCard({
           marginTop: 8,
         }}
       >
-        <div style={pillStyle}>
+        {isAdmin && isEditingBids && <div style={pillStyle}>
           Live Total: <b style={{ marginLeft: 6 }}>{bidTotalLive}</b>
           {roundNumber !== 5 && (
-            autoAwardEnabled && bidTotalLive < 10 ? (
+            autoAwardEnabled && allBidsFilled && bidTotalLive < 10 ? (
               <span style={{ marginLeft: 6 }}>• Auto-award ready</span>
             ) : !autoAwardEnabled ? (
               <span style={{ marginLeft: 6 }}>• Auto-award off</span>
             ) : null
           )}
-        </div>
+        </div>}
 
         {bidTotalCommitted != null && (
           <div
@@ -246,7 +250,7 @@ export default function RoundCard({
           </div>
         )}
 
-        {roundData.status !== "AUTO_AWARDED" && (
+        {isAdmin && canEditActuals && (
           <div
             style={{
               ...pillStyle,
@@ -259,7 +263,7 @@ export default function RoundCard({
           </div>
         )}
 
-        {isAdmin &&
+        {isAdmin && !bidLocked &&
           (isEditingBids ? (
             <button
               style={{
@@ -282,7 +286,7 @@ export default function RoundCard({
             </button>
           ))}
 
-        {isAdmin && roundData.status !== "AUTO_AWARDED" && (
+        {isAdmin && !highBid && hasRegularBids && (
           <>
             {canEditActuals ? (
               <button
@@ -315,7 +319,7 @@ export default function RoundCard({
       </div>
 
       {error && (
-        <div
+        <div role="alert"
           style={{
             color: "crimson",
             marginTop: 8,

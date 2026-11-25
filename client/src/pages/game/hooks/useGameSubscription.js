@@ -1,109 +1,61 @@
-import { useEffect, useRef, useState } from "react";
-import { API_BASE, getGame, getSummary } from "../../../api";
+import { useCallback, useEffect, useState } from "react";
+import { ledgerPath, request } from "../../../api.js";
 
-export default function useGameSubscription(gameId, options = {}) {
-  const { onRedirect } = options;
-  const [game, setGame] = useState(null);
-  const [summary, setSummary] = useState(null);
-  const [loading, setLoading] = useState(true);
+export default function useGameSubscription(seriesId) {
+  const [snapshot, setSnapshot] = useState(null);
   const [error, setError] = useState("");
   const [connected, setConnected] = useState(false);
-  const eventSourceRef = useRef(null);
+  const acceptSnapshot = useCallback((next) => {
+    if (next?.version !== 1 || next.game?.seriesId !== seriesId) return;
+    setSnapshot((current) =>
+      !current || next.revision > current.revision ? next : current);
+    setError("");
+  }, [seriesId]);
 
   useEffect(() => {
-    if (!gameId) return undefined;
+    let stopped = false;
+    let socket;
+    let timer;
+    let delay = 500;
+    const path = ledgerPath(seriesId);
 
-    let cancelled = false;
-    setLoading(true);
-    setError("");
-    setConnected(false);
+    function retry() {
+      if (stopped) return;
+      setConnected(false);
+      timer = setTimeout(connect, delay);
+      delay = Math.min(delay * 2, 15_000);
+    }
 
-    const bootstrap = async () => {
+    async function connect() {
       try {
-        const [initialGame, initialSummary] = await Promise.all([
-          getGame(gameId),
-          getSummary(gameId),
-        ]);
-        if (!cancelled) {
-          setGame(initialGame);
-          setSummary(initialSummary);
-          setLoading(false);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setError(e.message || "Failed to load game");
-          setLoading(false);
-        }
+        const view = await request(`${path}/snapshot`);
+        if (stopped) return;
+        acceptSnapshot(view);
+        const url = new URL(`${path}/socket`, window.location.href);
+        url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+        socket = new WebSocket(url);
+        socket.onmessage = (event) => {
+          if (stopped) return;
+          const next = JSON.parse(event.data);
+          acceptSnapshot(next);
+          setConnected(true);
+          delay = 500;
+        };
+        socket.onclose = retry;
+      } catch (err) {
+        if (stopped) return;
+        setError(err.message || "Unable to load the ledger.");
+        if (err.status !== 404) retry();
       }
+    }
 
-      if (cancelled) return;
-
-      const stream = new EventSource(`${API_BASE}/game/${gameId}/stream`);
-      eventSourceRef.current = stream;
-
-      stream.addEventListener("open", () => {
-        if (!cancelled) setConnected(true);
-      });
-
-      stream.addEventListener("snapshot", (event) => {
-        try {
-          const payload = JSON.parse(event.data || "{}");
-          if (payload.game) setGame(payload.game);
-          if (payload.summary) setSummary(payload.summary);
-          if (payload.message) setError(payload.message);
-          else setError("");
-        } catch (err) {
-          setError(err.message || "Failed to parse stream update");
-        }
-      });
-
-      stream.addEventListener("redirect", (event) => {
-        try {
-          const payload = JSON.parse(event.data || "{}");
-          if (payload?.gameId && typeof onRedirect === "function") {
-            onRedirect(payload.gameId);
-          }
-          setError("");
-        } catch (err) {
-          setError(err.message || "Failed to process redirect");
-        } finally {
-          if (!cancelled) {
-            setConnected(false);
-            stream.close();
-            if (eventSourceRef.current === stream) {
-              eventSourceRef.current = null;
-            }
-          }
-        }
-      });
-
-      stream.addEventListener("error", (event) => {
-        let message = "Lost connection to live updates";
-        if (event?.data) {
-          try {
-            const parsed = JSON.parse(event.data);
-            if (parsed?.message) message = parsed.message;
-          } catch {
-            message = event.data;
-          }
-        }
-        if (!cancelled) {
-          setConnected(false);
-          setError(message);
-        }
-      });
-    };
-
-    bootstrap();
-
+    connect();
     return () => {
-      cancelled = true;
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+      stopped = true;
+      clearTimeout(timer);
+      socket?.close();
     };
-  }, [gameId, onRedirect]);
+  }, [seriesId, acceptSnapshot]);
 
-  return { game, summary, loading, error, connected };
+  return { snapshot, error, connected, acceptSnapshot };
 }

@@ -1,7 +1,7 @@
 // src/pages/Home.jsx
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { createGame } from "../api";
+import { editorStorageKey, recoveryStorageKey, setupLedger } from "../api.js";
 
 export default function Home() {
   const [name, setName] = useState("Callbreak Series");
@@ -17,7 +17,31 @@ export default function Home() {
   const [openId, setOpenId] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [backupFile, setBackupFile] = useState(null);
+  const pending = useRef(null);
   const navigate = useNavigate();
+
+  async function submit(payload, action) {
+    const input = JSON.stringify({ action, payload });
+    if (pending.current?.input !== input) {
+      pending.current = { input, ...setupLedger(payload, action) };
+    }
+    const attempt = pending.current;
+    // Keep locally generated credentials available even if the setup response is lost.
+    localStorage.setItem(editorStorageKey(attempt.seriesId), attempt.editorKey);
+    sessionStorage.setItem(recoveryStorageKey(attempt.seriesId), attempt.recoveryKey);
+    try {
+      await attempt.submit();
+    } catch (error) {
+      if (error.status && error.status < 500) {
+        localStorage.removeItem(editorStorageKey(attempt.seriesId));
+        sessionStorage.removeItem(recoveryStorageKey(attempt.seriesId));
+        pending.current = null;
+      }
+      throw error;
+    }
+    navigate(`/ledger/${attempt.seriesId}`);
+  }
 
   async function onCreate() {
     try {
@@ -37,17 +61,13 @@ export default function Home() {
       if (parsedWeights.length !== 3)
         throw new Error("Provide exactly 3 weight values.");
 
-      // No stake sent; backend will default stake=1
-      const { gameId, adminKey } = await createGame({
+      await submit({
         name,
         players,
         weights: parsedWeights,
         startDealerIndex,
         autoAwardEnabled,
-      });
-
-      localStorage.setItem(`adminKey:${gameId}`, adminKey);
-      navigate(`/game/${gameId}`);
+      }, "create");
     } catch (e) {
       setErr(e.message || "Create failed");
     } finally {
@@ -55,16 +75,38 @@ export default function Home() {
     }
   }
 
+  async function onRestore(event) {
+    event.preventDefault();
+    setBusy(true);
+    setErr("");
+    try {
+      if (!backupFile || backupFile.size >= 4 * 1024 * 1024) throw new Error("Select a ledger backup under 4 MiB.");
+      await submit(JSON.parse(await backupFile.text()), "restore");
+    } catch (error) {
+      setErr(error.message || "Restore failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openLedger(event) {
+    event.preventDefault();
+    const id = openId.trim().toLowerCase().match(/(?:^|\/ledger\/)([a-f0-9]{32})\/?$/)?.[1];
+    if (id) navigate(`/ledger/${id}`);
+    else setErr("Enter a ledger link or series ID.");
+  }
+
   return (
     <div style={wrap}>
-      <h1>Nepali Callbreak</h1>
+      <h1>Callbreak Ledger</h1>
 
       <section style={card}>
-        <h2>Create Game</h2>
+        <h2>Create Ledger</h2>
 
-        <label style={label}>Game name</label>
+        <label htmlFor="series-name" style={label}>Ledger name</label>
         <input
           style={input}
+          id="series-name"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
@@ -82,6 +124,7 @@ export default function Home() {
               key={i}
               style={input}
               value={p}
+              aria-label={`Player ${i + 1}`}
               placeholder={`Player ${i + 1}`}
               onChange={(e) => {
                 const copy = [...players];
@@ -175,28 +218,34 @@ export default function Home() {
           style={{ ...btn, marginTop: 12 }}
           disabled={busy}
         >
-          {busy ? "Creating…" : "Create Game"}
+          {busy ? "Creating…" : "Create Ledger"}
         </button>
-        {err && <div style={errBox}>{err}</div>}
       </section>
 
       <section style={card}>
-        <h2>Open Game</h2>
-        <div style={{ display: "flex", gap: 8 }}>
+        <h2>Open Ledger</h2>
+        <form onSubmit={openLedger} className="ledger-actions">
           <input
             style={{ ...input, flex: 1 }}
-            placeholder="GAME ID"
+            placeholder="Viewer link or series ID"
+            aria-label="Viewer link or series ID"
             value={openId}
-            onChange={(e) => setOpenId(e.target.value.toUpperCase())}
+            onChange={(event) => setOpenId(event.target.value)}
           />
-          <button
-            onClick={() => openId && navigate(`/game/${openId}`)}
-            style={btn}
-          >
-            Open
-          </button>
-        </div>
+          <button style={btn}>Open</button>
+        </form>
       </section>
+
+      <section style={card}>
+        <h2>Restore Ledger</h2>
+        <p>Upload a ledger export to restore its scores, balances, and history under a new viewer link.</p>
+        <form onSubmit={onRestore} className="ledger-actions">
+          <input aria-label="Ledger backup" type="file" accept=".json,application/json" required
+            onChange={(event) => setBackupFile(event.target.files[0])} />
+          <button style={btn} disabled={busy}>Restore Backup</button>
+        </form>
+      </section>
+      {err && <div role="alert" style={errBox}>{err}</div>}
     </div>
   );
 }

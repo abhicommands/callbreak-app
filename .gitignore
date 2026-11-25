@@ -37,3 +37,8 @@ coverage/
 
 # Optional: Ignore test output
 test-results/
+# Worker and local verification state
+.wrangler/
+.tooling/
+.dev.vars*
+playwright-report/

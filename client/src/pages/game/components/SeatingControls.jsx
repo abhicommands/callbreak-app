@@ -63,7 +63,7 @@ export default function SeatingControls({
         <div>
           <h3 style={{ margin: 0 }}>Seating &amp; Dealer</h3>
           <div style={{ fontSize: 13, color: "#4b5563" }}>
-            Adjust player order or choose a new dealer between games.
+            Seating and dealer changes apply to upcoming rounds.
           </div>
         </div>
         {isAdmin && (
@@ -134,7 +134,7 @@ export default function SeatingControls({
               flexWrap: "wrap",
             }}
           >
-            <label>Quick set dealer</label>
+            <label>Next dealer</label>
             <select
               value={dealerId || ""}
               onChange={(event) => setDealerId(event.target.value)}

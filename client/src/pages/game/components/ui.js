@@ -2,7 +2,7 @@ import React from "react";
 
 export const wrapStyle = { maxWidth: 1100, margin: "24px auto", padding: "0 12px" };
 
-export function Card({ children, accent = "#e5e7eb", bg = "#fff", style = {} }) {
+export function Card({ as = "div", children, accent = "#e5e7eb", bg = "#fff", style = {}, ...props }) {
   const viewStyle = {
     border: `1px solid ${accent}`,
     padding: 16,
@@ -11,7 +11,7 @@ export function Card({ children, accent = "#e5e7eb", bg = "#fff", style = {} }) 
     marginTop: 16,
     ...style,
   };
-  return React.createElement("div", { style: viewStyle }, children);
+  return React.createElement(as, { ...props, style: viewStyle }, children);
 }
 
 export const tableStyle = {
@@ -46,7 +46,9 @@ export const inputStyle = {
 
 export const smallInputStyle = {
   ...inputStyle,
-  width: 80,
+  width: "100%",
+  maxWidth: 80,
+  minWidth: 48,
 };
 
 export const btnStyle = {
@@ -80,3 +82,11 @@ export const pillStyle = {
   border: "1px solid #e5e7eb",
   fontSize: 13,
 };
+
+const balanceFormat = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 6,
+  useGrouping: false,
+});
+
+export const formatBalance = (amount) => balanceFormat.format(amount);

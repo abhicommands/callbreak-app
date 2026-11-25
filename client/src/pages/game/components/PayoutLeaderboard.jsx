@@ -1,5 +1,5 @@
 import React from "react";
-import { Card, tableStyle, thStyle, tdStyle } from "./ui.js";
+import { Card, formatBalance, tableStyle, thStyle, tdStyle } from "./ui.js";
 
 export default function PayoutLeaderboard({ summary }) {
   const payouts = summary?.payouts || {};
@@ -36,7 +36,7 @@ export default function PayoutLeaderboard({ summary }) {
               <td style={tdStyle}>{index + 1}</td>
               <td style={{ ...tdStyle, textAlign: "left" }}>{row.name}</td>
               <td style={tdStyle}>
-                <b>{row.amount.toFixed(1)}</b>
+                <b>{formatBalance(row.amount)}</b>
               </td>
             </tr>
           ))}
