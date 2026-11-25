@@ -87,7 +87,32 @@ test("the Worker authorizes, commits, broadcasts, restores, and survives a resta
   revision = settings.find(({ status }) => status === 200).data.view.revision;
   await apply("settings", { autoAwardEnabled: true });
 
-  await apply("set-bids", { round: 1, bids: seats(4, 2, 2, 2) });
+  const secondSeriesId = randomHex(16);
+  const secondEditor = randomHex(32);
+  const second = await request("setup", {
+    seriesId: secondSeriesId,
+    token: secondEditor,
+    body: { ...setup, recoveryKey: randomHex(32), payload: { ...setup.payload, name: "Another table" } },
+  });
+  assert.equal(second.status, 201);
+  const secondBid = {
+    seriesId: secondSeriesId,
+    body: {
+      expectedRevision: second.data.view.revision,
+      action: "set-bids",
+      payload: { round: 1, bids: seats(3, 3, 3, 3) },
+    },
+  };
+  assert.equal((await request("command", { ...secondBid, token: editor })).status, 403);
+  const [firstBids, secondBids] = await Promise.all([
+    apply("set-bids", { round: 1, bids: seats(4, 2, 2, 2) }),
+    request("command", { ...secondBid, token: secondEditor }),
+  ]);
+  assert.equal(secondBids.status, 200);
+  assert.equal(firstBids.summary.projectedPoints[1], 4);
+  assert.equal(secondBids.data.view.summary.projectedPoints[1], 3);
+  assert.deepEqual((await request("snapshot", { seriesId: secondSeriesId })).data, secondBids.data.view);
+
   const bidKey = randomUUID();
   const actualBody = { expectedRevision: revision, action: "set-actuals", payload: { round: 1, actuals: seats(5, 2, 3, 3) } };
   const actualView = await apply(actualBody.action, actualBody.payload, { key: bidKey });

@@ -8,7 +8,13 @@ The React/Vite app is in `client/`. The Cloudflare Worker and SQLite Durable Obj
 
 Use the pinned Node version in `.nvmrc`. Run `npm ci` from the root and `npm run dev` to start Vite's production build on the local Wrangler stack. Local state is isolated in `.wrangler/ledger-dev`.
 
-Run `npm run lint`, `npm test`, `npm run test:browser`, and the Wrangler dry runs before requesting review. Install Chromium with `npm exec playwright -- install chromium` first. Include targeted tests for behavior changes. Put deterministic scoring coverage and Worker API tests in `test/`, and cross-context browser coverage in `test/browser/`. See the README for the command and environment details.
+Run `npm run lint`, `npm test`, `npm run test:browser`, and the Wrangler dry runs before requesting review. Install the test browsers with `npm exec playwright -- install chromium webkit` first. Include targeted tests for behavior changes. Put deterministic scoring coverage and Worker API tests in `test/`, and cross-context browser coverage in `test/browser/`. See the README for the command and environment details.
+
+## Mobile web
+
+Treat phone browsers as primary targets for the ledger and future online Callbreak. Support Safari, Chrome, and Brave on iOS, and Chrome and Brave on Android, alongside desktop browsers. Keep score entry and game controls usable in portrait and landscape with touch, a visible keyboard, and narrow screens. Use clear tap targets and provide a tap option for any drag interaction.
+
+Run the ledger flows in Android Chromium and iPhone WebKit profiles. For online play, cover joining by link, private hands, bidding and playing cards by touch, and reconnecting after the phone sleeps or switches networks. Record physical-device coverage when devices are available.
 
 ## Coding style
 

@@ -5,8 +5,9 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
   const worker = await localWorker();
   try {
     await worker.start();
-    const editorContext = await browser.newContext(devices["Pixel 7"]);
-    const viewerContext = await browser.newContext();
+    const phone = browser.browserType().name() === "webkit" ? "iPhone SE" : "Pixel 7";
+    const editorContext = await browser.newContext(devices[phone]);
+    const viewerContext = await browser.newContext(devices[phone]);
     const editor = await editorContext.newPage();
     const viewer = await viewerContext.newPage();
     await editor.goto(worker.origin);
@@ -93,9 +94,11 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     await expect(playerTotals(viewer, 1).nth(3)).toHaveText("6.6");
     await actual(4, [4, 3, 3, 3]);
 
-    const horizontalOverflow = await editor.evaluate(() =>
-      document.documentElement.scrollWidth > window.innerWidth);
-    expect(horizontalOverflow).toBe(false);
+    for (const page of [editor, viewer]) {
+      const horizontalOverflow = await page.evaluate(() =>
+        document.documentElement.scrollWidth > window.innerWidth);
+      expect(horizontalOverflow).toBe(false);
+    }
     await editor.getByRole("button", { name: "Resolve Game (apply payouts)" }).click();
     await expect(viewer.getByRole("heading", { name: "This Game Settlement (Applied)" })).toBeVisible();
     await editor.getByRole("button", { name: "Start Next Game (carry payouts)" }).click();

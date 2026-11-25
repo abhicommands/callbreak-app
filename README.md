@@ -23,15 +23,15 @@ Open `http://127.0.0.1:8787`. The dev command builds the frontend and starts the
 | `npm run dev` | Start Wrangler with persistent local data in `.wrangler/ledger-dev` |
 | `npm run lint` | Check the React source with ESLint and the Worker with TypeScript |
 | `npm test` | Build the app, run scoring tests, and exercise the local Worker with fresh SQLite storage |
-| `npm exec playwright -- install chromium` | Install the browser for end-to-end tests. Add `--with-deps` on Linux when OS libraries are needed |
-| `npm run test:browser` | Build the app and test it in independent Chromium editor and viewer contexts |
+| `npm exec playwright -- install chromium webkit` | Install the browsers for end-to-end tests. Add `--with-deps` on Linux when OS libraries are needed |
+| `npm run test:browser` | Build the app and test mobile editor flows and independent viewers in Android Chromium and iPhone WebKit profiles |
 | `npm run build` | Build static assets into `client/dist` |
 
 The browser and API test suites each start Wrangler with a temporary directory. Local data, the named Cloudflare preview environment, and the production namespace are isolated. The old Express server kept games in memory and was replaced by the Worker. Scoring remains in JavaScript under `server/src`.
 
 ## Pull requests
 
-The **Verify ledger** check runs a clean install, dependency audit, lint, scoring tests, a real local Worker, and Chromium tests. It also checks both Cloudflare bundles with dry runs. Keep gameplay rules in the shared JavaScript scoring code so another mode can reuse them.
+The **Verify ledger** check runs a clean install, dependency audit, lint, scoring tests, a real local Worker, and Chromium and WebKit tests. It also checks both Cloudflare bundles with dry runs. Keep gameplay rules in the shared JavaScript scoring code so another mode can reuse them.
 
 ## Play and share
 
