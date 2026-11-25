@@ -26,10 +26,10 @@ export default function GamePage({ seriesId }) {
   const [actionError, setActionError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
   const [series, setSeries] = useState(null);
-  const [history, setHistory] = useState(null);
+  const [historyResult, setHistoryResult] = useState(null);
   const [historyError, setHistoryError] = useState("");
-  const [historyLoading, setHistoryLoading] = useState(false);
   const [selectedHistoryGameId, setSelectedHistoryGameId] = useState("");
+  const currentHistory = historyResult?.gameId === selectedHistoryGameId ? historyResult : null;
   const pending = useRef(null);
 
   useEffect(() => {
@@ -54,13 +54,12 @@ export default function GamePage({ seriesId }) {
   useEffect(() => {
     if (!showHistory || !gameId) return;
     let active = true;
-    setHistoryError("");
     request(`${path}/history`).then((data) => {
       if (!active) return;
       setSeries(data);
       const latest = data.games.filter((entry) => entry.settlementApplied).at(-1);
       setSelectedHistoryGameId(latest?.gameId || "");
-      if (!latest) setHistoryError("History is available after a game is settled.");
+      setHistoryError(latest ? "" : "History is available after a game is settled.");
     }).catch((err) => {
       if (active) setHistoryError(err.message);
     });
@@ -68,20 +67,12 @@ export default function GamePage({ seriesId }) {
   }, [showHistory, gameId, settled, path]);
 
   useEffect(() => {
-    if (!showHistory || !selectedHistoryGameId) {
-      setHistory(null);
-      return;
-    }
+    if (!showHistory || !selectedHistoryGameId) return;
     let active = true;
-    setHistoryLoading(true);
-    setHistory(null);
-    setHistoryError("");
     request(`${path}/history/${selectedHistoryGameId}`).then((data) => {
-      if (active) setHistory(data);
+      if (active) setHistoryResult({ gameId: selectedHistoryGameId, data });
     }).catch((err) => {
-      if (active) setHistoryError(err.message);
-    }).finally(() => {
-      if (active) setHistoryLoading(false);
+      if (active) setHistoryResult({ gameId: selectedHistoryGameId, error: err.message });
     });
     return () => { active = false; };
   }, [showHistory, selectedHistoryGameId, path]);
@@ -152,8 +143,8 @@ export default function GamePage({ seriesId }) {
         {showHistory ? "Hide Game History" : "View Game History"}
       </button>
       {showHistory && (
-        <GameHistory series={series} history={history} error={historyError}
-          loading={historyLoading} selectedGameId={selectedHistoryGameId}
+        <GameHistory series={series} history={currentHistory?.data} error={historyError || currentHistory?.error}
+          loading={Boolean(selectedHistoryGameId && !currentHistory)} selectedGameId={selectedHistoryGameId}
           onSelectGame={setSelectedHistoryGameId} />
       )}
 

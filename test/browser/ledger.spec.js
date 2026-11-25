@@ -23,6 +23,16 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     await expect(viewer.getByRole("button", { name: "Set Bids" })).toHaveCount(0);
     await expect(viewer.getByText(recovery)).toHaveCount(0);
 
+    await editor.getByRole("button", { name: "Edit Seating" }).click();
+    const dealer = editor.getByRole("combobox").filter({
+      has: editor.locator("option").filter({ hasText: /^Player 1$/ }),
+    });
+    await expect(dealer).toHaveValue("1");
+    await dealer.selectOption("2");
+    await editor.getByRole("button", { name: "Reset", exact: true }).click();
+    await expect(dealer).toHaveValue("1");
+    await editor.getByRole("button", { name: "Close", exact: true }).click();
+
     const round = (page, number) => page.getByRole("region", { name: `Round ${number}` });
     const totalRows = (page) => page.getByRole("heading", { name: "Total Points (This Game)" })
       .locator("..").getByRole("row");
