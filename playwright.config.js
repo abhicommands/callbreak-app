@@ -5,4 +5,8 @@ export default defineConfig({
   timeout: 45_000,
   retries: 0,
   use: { trace: "retain-on-failure" },
+  projects: [
+    { name: "android-chromium", use: { browserName: "chromium" } },
+    { name: "iphone-webkit", use: { browserName: "webkit" } },
+  ],
 });

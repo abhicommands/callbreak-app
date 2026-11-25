@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-export async function localWorker() {
+export async function localWorker({ idleSeconds } = {}) {
   const persistence = await mkdtemp(join(tmpdir(), "callbreak-worker-"));
   const listener = createServer().listen(0, "127.0.0.1");
   await once(listener, "listening");
@@ -36,6 +36,7 @@ export async function localWorker() {
       child = spawn(process.execPath, [
         "node_modules/wrangler/bin/wrangler.js", "dev", "--env", "", "--local",
         "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence,
+        ...(idleSeconds ? ["--var", `LEDGER_IDLE_SECONDS:${idleSeconds}`] : []),
       ], {
         cwd: root, detached, stdio: ["ignore", "pipe", "pipe"],
         env: { ...process.env, WRANGLER_SEND_METRICS: "false" },

@@ -23,15 +23,15 @@ Open `http://127.0.0.1:8787`. The dev command builds the frontend and starts the
 | `npm run dev` | Start Wrangler with persistent local data in `.wrangler/ledger-dev` |
 | `npm run lint` | Check the React source with ESLint and the Worker with TypeScript |
 | `npm test` | Build the app, run scoring tests, and exercise the local Worker with fresh SQLite storage |
-| `npm exec playwright -- install chromium` | Install the browser for end-to-end tests. Add `--with-deps` on Linux when OS libraries are needed |
-| `npm run test:browser` | Build the app and test it in independent Chromium editor and viewer contexts |
+| `npm exec playwright -- install chromium webkit` | Install the browsers for end-to-end tests. Add `--with-deps` on Linux when OS libraries are needed |
+| `npm run test:browser` | Build the app and test mobile editor flows and independent viewers in Android Chromium and iPhone WebKit profiles |
 | `npm run build` | Build static assets into `client/dist` |
 
 The browser and API test suites each start Wrangler with a temporary directory. Local data, the named Cloudflare preview environment, and the production namespace are isolated. The old Express server kept games in memory and was replaced by the Worker. Scoring remains in JavaScript under `server/src`.
 
 ## Pull requests
 
-The **Verify ledger** check runs a clean install, dependency audit, lint, scoring tests, a real local Worker, and Chromium tests. It also checks both Cloudflare bundles with dry runs. Keep gameplay rules in the shared JavaScript scoring code so another mode can reuse them.
+The **Verify ledger** check runs a clean install, dependency audit, lint, scoring tests, a real local Worker, and Chromium and WebKit tests. It also checks both Cloudflare bundles with dry runs. Keep gameplay rules in the shared JavaScript scoring code so another mode can reuse them.
 
 ## Play and share
 
@@ -50,7 +50,9 @@ The **Verify ledger** check runs a clean install, dependency audit, lint, scorin
 
 ## Backups and API
 
-Use **Export Ledger** while editing to save a versioned JSON backup. The download includes the series events needed to replay scores, balances, side games, and settled history. **Restore Backup** on the home page validates and replays the file into a fresh series with a new viewer URL and private credentials. The source series remains accessible at its own link. The first format supports 5,000 accepted operations per series and a 4 MiB restore request.
+Ledgers expire after 24 hours without a saved editor change. A save resets the timer for the whole ledger, including its settled history. Viewing, reconnecting, and exporting leave the timer alone. Export before the deadline to keep your scores, balances, and history. Ledgers created before expiration was introduced start their timer on their next saved editor change.
+
+Use **Export Ledger** while editing to save a versioned JSON backup. The download includes the series events needed to replay scores, balances, side games, and settled history. **Restore Backup** on the home page validates and replays the file into a fresh series with a new viewer URL and private credentials and a fresh 24-hour window. The source ledger keeps its own expiration date and link. The first format supports 5,000 accepted operations per series and a 4 MiB restore request.
 
 The public API exposes `GET /api/ledger/<seriesId>/snapshot`, `/socket` (a read-only, hibernating WebSocket), and `/history` or `/history/<gameId>`. HTTP and WebSocket snapshots share a version and a monotonically increasing series revision. The browser refreshes over HTTP when reconnecting.
 

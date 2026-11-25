@@ -102,6 +102,7 @@ export default function Home() {
 
       <section style={card}>
         <h2>Create Ledger</h2>
+        <p>Ledgers expire after 24 hours without a saved editor change. Export a backup to keep your games and balances.</p>
 
         <label htmlFor="series-name" style={label}>Ledger name</label>
         <input
