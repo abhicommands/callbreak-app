@@ -22,8 +22,7 @@ Thumbs.db
 
 # Environment files
 .env
-.env.local
-.env.*.local
+.env.*
 
 # IDE/editor folders
 .vscode/
@@ -42,3 +41,7 @@ test-results/
 .tooling/
 .dev.vars*
 playwright-report/
+
+# Local deployment instructions and downloaded ledger backups
+/CLOUDFLARE-DEPLOY.local.md
+/callbreak-*.json
