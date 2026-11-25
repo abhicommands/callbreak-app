@@ -1,6 +1,8 @@
 import { checkWorker } from "../scripts/check-worker.js";
 import assert from "node:assert/strict";
 import { randomBytes, randomUUID } from "node:crypto";
+import { once } from "node:events";
+import { setTimeout as wait } from "node:timers/promises";
 import { test } from "node:test";
 import { waitFor } from "./wait-for.js";
 import { localWorker } from "./local-worker.js";
@@ -48,6 +50,7 @@ test("the Worker authorizes, commits, broadcasts, restores, and survives a resta
   const setupKey = randomUUID();
   const initial = await request("setup", { token: editor, key: setupKey, body: setup });
   assert.equal(initial.status, 201);
+  assert.ok(initial.data.view.expiresAt > Date.now() + 86_390_000);
   revision = initial.data.view.revision;
   assert.equal((await request("setup", { token: editor, key: setupKey, body: setup })).data.replayed, true);
 
@@ -177,5 +180,80 @@ test("the Worker authorizes, commits, broadcasts, restores, and survives a resta
   assert.deepEqual((await request("history/1")).data, settledHistory);
   assert.equal((await request("command", { token: newEditor, key: nextKey, body: nextBody })).data.replayed, true);
   const restored = (await request("snapshot", { seriesId: restoredId })).data;
-  assert.deepEqual(restored, { ...recovered.data.view, game: { ...recovered.data.view.game, seriesId: restoredId } });
+  assert.ok(restored.expiresAt >= recovered.data.view.expiresAt);
+  assert.deepEqual(restored, {
+    ...recovered.data.view,
+    expiresAt: restored.expiresAt,
+    game: { ...recovered.data.view.game, seriesId: restoredId },
+  });
+});
+
+test("inactivity alarms delete the ledger and a backup restores it with a fresh deadline", { timeout: 45_000 }, async (t) => {
+  const worker = await localWorker({ idleSeconds: 5 });
+  t.after(() => worker.dispose());
+  await worker.start();
+
+  const config = { name: "Expiry test", players: ["A", "B", "C", "D"], weights: [1, 2, 3] };
+  const newLedger = (action = "create", payload = config) => ({
+    id: randomHex(16),
+    editor: randomHex(32),
+    setup: { expectedRevision: 0, action, payload, recoveryKey: randomHex(32) },
+  });
+  function request(ledger, route, { editor = false, key = randomUUID(), body } = {}) {
+    const headers = {};
+    if (editor) headers.Authorization = `Bearer ${ledger.editor}`;
+    if (body) Object.assign(headers, { "Content-Type": "application/json", "Idempotency-Key": key });
+    return fetch(`${worker.origin}/api/ledger/${ledger.id}/${route}`, {
+      method: body ? "POST" : "GET", headers, body: body && JSON.stringify(body),
+    });
+  }
+  async function setup(ledger) {
+    const response = await request(ledger, "setup", { editor: true, body: ledger.setup });
+    assert.equal(response.status, 201);
+    return (await response.json()).view;
+  }
+  async function listen(ledger) {
+    const socket = new WebSocket(`${worker.origin.replace("http", "ws")}/api/ledger/${ledger.id}/socket`);
+    t.after(() => socket.close());
+    const closed = once(socket, "close").then(([event]) => event.code);
+    await once(socket, "message");
+    return { closed };
+  }
+
+  const idle = newLedger();
+  const edited = newLedger();
+  const [idleView, firstView] = await Promise.all([setup(idle), setup(edited)]);
+  const [idleSocket, editedSocket] = await Promise.all([listen(idle), listen(edited)]);
+  await wait(1800);
+
+  const viewer = await request(idle, "snapshot");
+  assert.equal((await viewer.json()).expiresAt, idleView.expiresAt);
+  const key = randomUUID();
+  const body = { expectedRevision: firstView.revision, action: "set-bids", payload: { round: 1, bids: seats(4, 2, 2, 2) } };
+  const saved = await request(edited, "command", { editor: true, key, body });
+  assert.equal(saved.status, 200);
+  const { view } = await saved.json();
+  assert.ok(view.expiresAt > firstView.expiresAt);
+  const duplicate = await request(edited, "command", { editor: true, key, body });
+  assert.equal((await duplicate.json()).view.expiresAt, view.expiresAt);
+
+  const backup = await (await request(edited, "export", { editor: true })).json();
+  assert.equal((await (await request(edited, "snapshot")).json()).expiresAt, view.expiresAt);
+
+  // Check the logical deadlines separately from the runtime's alarm delivery.
+  await wait(Math.max(idleView.expiresAt, firstView.expiresAt) - Date.now() + 50);
+  assert.ok([404, 410].includes((await request(idle, "snapshot")).status));
+  assert.equal((await request(edited, "snapshot")).status, 200);
+
+  // Alarm closure proves physical cleanup happened without an editor being present.
+  assert.deepEqual(await Promise.all([idleSocket.closed, editedSocket.closed]), [4004, 4004]);
+  assert.equal((await request(idle, "snapshot")).status, 404);
+  assert.equal((await request(edited, "snapshot")).status, 404);
+  assert.equal((await request(edited, "export", { editor: true })).status, 404);
+
+  const restoredLedger = newLedger("restore", backup);
+  const restored = await setup(restoredLedger);
+  assert.ok(restored.expiresAt > view.expiresAt);
+  assert.deepEqual(restored.summary, view.summary);
+  assert.notEqual(restored.game.seriesId, view.game.seriesId);
 });

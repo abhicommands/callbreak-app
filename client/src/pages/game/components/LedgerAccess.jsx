@@ -2,7 +2,7 @@ import React, { useRef, useState } from "react";
 import { ledgerPath, randomHex, recoveryStorageKey, request } from "../../../api.js";
 import { Card, btnStyle, inputStyle, lightBtnStyle } from "./ui.js";
 
-export default function LedgerAccess({ seriesId, revision, editorKey, onEditor, onSnapshot }) {
+export default function LedgerAccess({ seriesId, revision, editorKey, expiresAt, onEditor, onSnapshot }) {
   const [recoveryCode, setRecoveryCode] = useState(() => sessionStorage.getItem(recoveryStorageKey(seriesId)));
   const [secret, setSecret] = useState("");
   const [recovering, setRecovering] = useState(false);
@@ -78,6 +78,11 @@ export default function LedgerAccess({ seriesId, revision, editorKey, onEditor, 
           <button style={lightBtnStyle} disabled={busy} onClick={exportLedger}>Export Ledger</button>
         )}
       </div>
+      {editorKey && (
+        <p>{expiresAt
+          ? `Expires ${new Date(expiresAt).toLocaleString()} unless you save another edit. Export a backup to keep this ledger.`
+          : "Your next saved edit starts the 24-hour inactivity timer. Export a backup to keep this ledger."}</p>
+      )}
       {editorKey && recoveryCode && (
         <div className="ledger-recovery">
           <p>Save this recovery code privately. It lets you replace the editor code if you lose access.</p>

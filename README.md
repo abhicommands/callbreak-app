@@ -50,7 +50,9 @@ The **Verify ledger** check runs a clean install, dependency audit, lint, scorin
 
 ## Backups and API
 
-Use **Export Ledger** while editing to save a versioned JSON backup. The download includes the series events needed to replay scores, balances, side games, and settled history. **Restore Backup** on the home page validates and replays the file into a fresh series with a new viewer URL and private credentials. The source series remains accessible at its own link. The first format supports 5,000 accepted operations per series and a 4 MiB restore request.
+Ledgers expire after 24 hours without a saved editor change. A save resets the timer for the whole ledger, including its settled history. Viewing, reconnecting, and exporting leave the timer alone. Export before the deadline to keep your scores, balances, and history. Ledgers created before expiration was introduced start their timer on their next saved editor change.
+
+Use **Export Ledger** while editing to save a versioned JSON backup. The download includes the series events needed to replay scores, balances, side games, and settled history. **Restore Backup** on the home page validates and replays the file into a fresh series with a new viewer URL and private credentials and a fresh 24-hour window. The source ledger keeps its own expiration date and link. The first format supports 5,000 accepted operations per series and a 4 MiB restore request.
 
 The public API exposes `GET /api/ledger/<seriesId>/snapshot`, `/socket` (a read-only, hibernating WebSocket), and `/history` or `/history/<gameId>`. HTTP and WebSocket snapshots share a version and a monotonically increasing series revision. The browser refreshes over HTTP when reconnecting.
 

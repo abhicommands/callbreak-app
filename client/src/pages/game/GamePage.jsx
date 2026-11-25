@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { Link } from "react-router-dom";
 import { editorStorageKey, ledgerPath, request } from "../../api.js";
 import useGameSubscription from "./hooks/useGameSubscription.js";
 import PageWrap from "./components/PageWrap.jsx";
@@ -20,7 +21,7 @@ const emptyRound = { bids: {}, actuals: {}, points: {} };
 export default function GamePage({ seriesId }) {
   const path = ledgerPath(seriesId);
   const { snapshot, error, connected, acceptSnapshot } = useGameSubscription(seriesId);
-  const { game, summary, revision } = snapshot || {};
+  const { game, summary, revision, expiresAt } = snapshot || {};
   const [editorKey, setEditorKey] = useState("");
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
@@ -119,7 +120,12 @@ export default function GamePage({ seriesId }) {
     return (
       <PageWrap>
         <h1>Callbreak Ledger</h1>
-        {error ? <ErrorBanner message={error} /> : <p>Loading ledger…</p>}
+        {error ? (
+          <>
+            <ErrorBanner message={error} />
+            <p><Link to="/">Open or restore a ledger</Link></p>
+          </>
+        ) : <p>Loading ledger…</p>}
       </PageWrap>
     );
   }
@@ -142,7 +148,7 @@ export default function GamePage({ seriesId }) {
         connected={connected}
       />
       <ErrorBanner message={error || actionError} />
-      <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey}
+      <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
         onEditor={storeEditor} onSnapshot={acceptSnapshot} />
 
       <button style={{ ...btnStyle, marginTop: 16 }} onClick={() => setShowHistory(!showHistory)}>

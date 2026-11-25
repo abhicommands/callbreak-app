@@ -14,6 +14,7 @@ import {
 
 interface Env {
   LEDGER: DurableObjectNamespace<Ledger>;
+  LEDGER_IDLE_SECONDS?: string;
 }
 
 type Game = ReturnType<typeof createGame>;
@@ -27,9 +28,12 @@ const FORMAT = "callbreak-ledger";
 const VERSION = 1;
 const MAX_EVENTS = 5_000;
 const BACKUP_BYTES = 4 * 1024 * 1024;
+const IDLE_SECONDS = 24 * 60 * 60;
+const EXPIRY_KEY = "expiresAt";
+const EXPIRED_MESSAGE = "This ledger expired. Restore a backup from the home page to continue.";
 
-function snapshot(game: Game, revision: number) {
-  return { version: VERSION, revision, game: publicGame(game), summary: getSummary(game) };
+function snapshot(game: Game, revision: number, expiresAt: number | null) {
+  return { version: VERSION, revision, expiresAt, game: publicGame(game), summary: getSummary(game) };
 }
 
 function parseGame(data: string): Game {
@@ -41,8 +45,7 @@ export class Ledger extends DurableObject<Env> {
     return this.ctx.storage.sql;
   }
 
-  constructor(ctx: DurableObjectState, env: Env) {
-    super(ctx, env);
+  private initializeSchema() {
     this.sql.exec(`
       CREATE TABLE IF NOT EXISTS ledger (
         id INTEGER PRIMARY KEY CHECK (id = 1), revision INTEGER NOT NULL,
@@ -61,13 +64,43 @@ export class Ledger extends DurableObject<Env> {
   }
 
   private findLedger() {
+    const schema = this.sql.exec("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'ledger'");
+    if (!schema.toArray().length) return undefined;
     return this.sql.exec<LedgerRow>("SELECT revision, editor, recovery, game FROM ledger WHERE id = 1").toArray()[0];
+  }
+
+  private expiresAt() {
+    return this.ctx.storage.kv.get<number>(EXPIRY_KEY) ?? null;
+  }
+
+  private requireActive(expiresAt: number | null) {
+    if (expiresAt !== null && expiresAt <= Date.now()) throw new HttpError(410, EXPIRED_MESSAGE);
   }
 
   private requireLedger() {
     const row = this.findLedger();
     if (!row) throw new HttpError(404, "Ledger not found.");
+    this.requireActive(this.expiresAt());
     return row;
+  }
+
+  async alarm() {
+    const expiresAt = this.expiresAt();
+    if (expiresAt === null) return;
+    if (expiresAt > Date.now()) {
+      await this.ctx.storage.setAlarm(expiresAt);
+      return;
+    }
+
+    const sockets = this.ctx.getWebSockets();
+    await this.ctx.storage.deleteAll();
+    for (const socket of sockets) {
+      try {
+        socket.close(4004, "Ledger expired");
+      } catch {
+        // The client may already have disconnected.
+      }
+    }
   }
 
   private recordEvent(event: Event) {
@@ -97,7 +130,7 @@ export class Ledger extends DurableObject<Env> {
     const row = this.requireLedger();
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.send(JSON.stringify(snapshot(parseGame(row.game), row.revision)));
+    server.send(JSON.stringify(snapshot(parseGame(row.game), row.revision, this.expiresAt())));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -174,14 +207,20 @@ export class Ledger extends DurableObject<Env> {
     ]);
     if (replacement) assert(!matches(verifier, replacement), 400, "Use separate editor and recovery credentials.");
 
-    const result = this.ctx.storage.transactionSync(() => {
+    const result = await this.ctx.storage.transaction(async (txn) => {
       const row = this.findLedger();
+      const currentExpiry = row ? this.expiresAt() : null;
       if (row) {
+        this.requireActive(currentExpiry);
         assert(matches(verifier, route === "recover" ? row.recovery : row.editor), 403, "Invalid credential.");
         const [receipt] = this.sql.exec<Receipt>("SELECT revision, fingerprint FROM receipt WHERE command_key = ?", key);
         if (receipt) {
           assert(matches(fingerprint, receipt.fingerprint), 409, "Idempotency key already used for a different request.");
-          return { view: snapshot(parseGame(row.game), row.revision), committedRevision: receipt.revision, replayed: true };
+          return {
+            view: snapshot(parseGame(row.game), row.revision, currentExpiry),
+            committedRevision: receipt.revision,
+            replayed: true,
+          };
         }
       }
       const previous = row?.revision ?? 0;
@@ -191,10 +230,15 @@ export class Ledger extends DurableObject<Env> {
       }
       assert(previous < MAX_EVENTS, 409, "This ledger has reached its command limit.");
       const at = Date.now();
+      const idleSeconds = Number(this.env.LEDGER_IDLE_SECONDS ?? IDLE_SECONDS);
+      assert(Number.isSafeInteger(idleSeconds) && idleSeconds > 0 && idleSeconds <= IDLE_SECONDS,
+        500, "Invalid ledger expiration configuration.");
+      const expiresAt = at + idleSeconds * 1000;
       let revision = previous + 1;
       let game;
       if (route === "setup") {
         assert(!row && replacement, 409, "Ledger already exists.");
+        this.initializeSchema();
         if (action === "restore") {
           const restored = this.restore(seriesId, payload);
           game = restored.active;
@@ -225,7 +269,11 @@ export class Ledger extends DurableObject<Env> {
         }
       }
       this.sql.exec("INSERT INTO receipt VALUES (?, ?, ?)", key, revision, fingerprint);
-      return { view: snapshot(game, revision), committedRevision: revision, replayed: false };
+      this.ctx.storage.kv.put(EXPIRY_KEY, expiresAt);
+      // The first alarm and the ledger commit are atomic. Later saves move the deadline;
+      // the existing alarm wakes up at its original time and rechecks the saved deadline.
+      if (currentExpiry === null) await txn.setAlarm(expiresAt);
+      return { view: snapshot(game, revision, expiresAt), committedRevision: revision, replayed: false };
     });
 
     if (!result.replayed) this.broadcast(result.view);
@@ -244,7 +292,7 @@ export class Ledger extends DurableObject<Env> {
         if (route === "editor" || route === "export") return await this.editorRead(request, route);
         if (route === "snapshot") {
           const row = this.requireLedger();
-          return json(snapshot(parseGame(row.game), row.revision));
+          return json(snapshot(parseGame(row.game), row.revision, this.expiresAt()));
         }
       }
       if (request.method === "POST" && ["setup", "command", "recover"].includes(route)) {

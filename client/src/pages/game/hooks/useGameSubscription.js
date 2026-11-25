@@ -26,6 +26,12 @@ export default function useGameSubscription(seriesId) {
       delay = Math.min(delay * 2, 15_000);
     }
 
+    function showUnavailable(message) {
+      setConnected(false);
+      setSnapshot(null);
+      setError(message);
+    }
+
     async function connect() {
       try {
         const view = await request(`${path}/snapshot`);
@@ -41,11 +47,24 @@ export default function useGameSubscription(seriesId) {
           setConnected(true);
           delay = 500;
         };
-        socket.onclose = retry;
+        socket.onclose = (event) => {
+          if (stopped) return;
+          if (event.code === 4004) {
+            showUnavailable("This ledger expired. Restore a backup from the home page to continue.");
+          } else {
+            retry();
+          }
+        };
       } catch (err) {
         if (stopped) return;
-        setError(err.message || "Unable to load the ledger.");
-        if (err.status !== 404) retry();
+        if (err.status === 404) {
+          showUnavailable("Ledger not found. If it expired, restore a backup from the home page.");
+        } else if (err.status === 410) {
+          showUnavailable(err.message);
+        } else {
+          setError(err.message || "Unable to load the ledger.");
+          retry();
+        }
       }
     }
 

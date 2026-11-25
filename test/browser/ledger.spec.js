@@ -12,6 +12,7 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     await editor.goto(worker.origin);
     await editor.getByRole("button", { name: "Create Ledger" }).click();
     await expect(editor.getByText("Live sync: Online")).toBeVisible();
+    await expect(editor.getByText(/Expires .+ unless you save another edit/)).toBeVisible();
     const shareLink = editor.url();
     expect(shareLink).toMatch(/\/ledger\/[a-f0-9]{32}$/);
     const recovery = await editor.getByLabel("Recovery code", { exact: true }).inputValue();
