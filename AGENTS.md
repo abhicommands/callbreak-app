@@ -12,7 +12,7 @@ Run `npm run lint`, `npm test`, `npm run test:browser`, and the Wrangler dry run
 
 ## Mobile web
 
-Treat phone browsers as primary targets for the ledger and future online Callbreak. Support Safari, Chrome, and Brave on iOS, and Chrome and Brave on Android, alongside desktop browsers. Keep score entry and game controls usable in portrait and landscape with touch, a visible keyboard, and narrow screens. Use clear tap targets and provide a tap option for any drag interaction.
+Treat phone browsers as primary targets for the ledger and online Callbreak. Support Safari, Chrome, and Brave on iOS, and Chrome and Brave on Android, alongside desktop browsers. Keep score entry and game controls usable in portrait and landscape with touch, a visible keyboard, and narrow screens. Use clear tap targets and provide a tap option for any drag interaction.
 
 Run the ledger flows in Android Chromium and iPhone WebKit profiles. For online play, cover joining by link, private hands, bidding and playing cards by touch, and reconnecting after the phone sleeps or switches networks. Record physical-device coverage when devices are available.
 

@@ -36,7 +36,7 @@ export default function SettlementCard({ summary }) {
         <tbody>
           {rows.map((row, index) => (
             <tr key={row.id}>
-              <td style={tdStyle}>{index + 1}</td>
+              <td style={tdStyle}>{settlement.winnerIds?.includes(row.id) ? 1 : index + 1}</td>
               <td style={{ ...tdStyle, textAlign: "left" }}>{row.name}</td>
               <td style={tdStyle}>{row.points.toFixed(1)}</td>
               <td style={tdStyle}>

@@ -14,6 +14,8 @@ import SeatingControls from "./components/SeatingControls.jsx";
 import AdminActions from "./components/AdminActions.jsx";
 import GameSettingsPanel from "./components/GameSettingsPanel.jsx";
 import LedgerAccess from "./components/LedgerAccess.jsx";
+import TieSettlement from "./components/TieSettlement.jsx";
+import { OnlineLedger } from "../online/OnlineLedger.jsx";
 import { btnStyle } from "./components/ui.js";
 
 const emptyRound = { bids: {}, actuals: {}, points: {} };
@@ -123,7 +125,7 @@ export default function GamePage({ seriesId }) {
         {error ? (
           <>
             <ErrorBanner message={error} />
-            <p><Link to="/">Open or restore a ledger</Link></p>
+            <p><Link to="/ledger">Open or restore a ledger</Link></p>
           </>
         ) : <p>Loading ledger…</p>}
       </PageWrap>
@@ -137,6 +139,16 @@ export default function GamePage({ seriesId }) {
   const latestRecorded = Math.max(0, ...game.recordedRounds);
   const nextDealer = game.roundInfo[latestRecorded + 1]?.dealerId;
   const canSubstitute = editable && game.canSubstitute;
+
+  if (game.mode === "online") {
+    return <OnlineLedger game={game} summary={summary} connected={connected} onlineTable={snapshot.onlineTable}>
+      {editorKey && <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
+        onEditor={storeEditor} onSnapshot={acceptSnapshot} />}
+      {actionError && <ErrorBanner message={actionError} />}
+      {editorKey && summary.pendingTie?.length > 0 && <TieSettlement players={summary.pendingTie} ready={!saving}
+        onSettle={(choice) => save("settle-game", choice)} />}
+    </OnlineLedger>;
+  }
 
   return (
     <PageWrap>
@@ -171,8 +183,8 @@ export default function GamePage({ seriesId }) {
             );
           })}
           <AdminActions isAdmin={Boolean(editorKey)} saving={saving}
-            canResolve={allResolved} settlementApplied={settled}
-            onResolveGame={() => save("resolve-game")} onNextGame={() => save("next-game")} />
+            canResolve={allResolved} settlementApplied={settled} pendingTie={summary.pendingTie ?? []}
+            onResolveGame={(choice) => save("settle-game", choice)} onNextGame={() => save("next-game")} />
         </main>
 
         <aside className="ledger-sidebar">

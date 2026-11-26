@@ -39,14 +39,15 @@ export function calcPoints(bid, actual) {
 }
 
 export function pointTotals(session) {
-  const entries = session.players.map(({ id }) => {
+  const roster = session.mode === "online" ? [...session.players, ...session.inactivePlayers] : session.players;
+  const entries = roster.map(({ id }) => {
     let confirmed = 0;
     let pending = 0;
     for (const [round, data] of Object.entries(session.roundData)) {
       if (data.status === "PLAYED" || data.status === "AUTO_AWARDED") {
-        confirmed += Math.round(data.points[id] * 10);
+        confirmed += Math.round((data.points[id] ?? 0) * 10);
       } else if (data.status === "BIDS_SET" && session.highBid?.round !== Number(round)) {
-        pending += data.bids[id] * 10;
+        pending += (data.bids[id] ?? 0) * 10;
       }
     }
     return [id, { confirmed: confirmed / 10, projected: (confirmed + pending) / 10 }];
@@ -118,7 +119,7 @@ export function scorePlayedRound(session, round, at) {
   }, at);
 }
 
-export function computeFinalSettlement(session) {
+function settlementRanking(session) {
   const { totalsPoints: totals } = pointTotals(session);
   const rounds = session.rounds || 5;
 
@@ -166,37 +167,68 @@ export function computeFinalSettlement(session) {
 
   assert(playersWithPriority.length === 4, 400, "Invalid players");
 
-  const ranking = [...playersWithPriority].sort((a, b) => {
+  return playersWithPriority.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     if (b.total !== a.total) return b.total - a.total;
     return 0;
   });
+}
+
+function firstPlace(ranking) {
+  const [winner] = ranking;
+  return ranking.filter((player) => player.priority === winner.priority && player.total === winner.total);
+}
+
+export function pendingSettlementTie(session) {
+  if (session.settlementApplied || session.settlementSkipped || session.highBid || !allRoundsResolved(session)) return [];
+  const contenders = firstPlace(settlementRanking(session));
+  return contenders.length > 1 ? contenders : [];
+}
+
+export function computeFinalSettlement(session, choice = null) {
+  let ranking = settlementRanking(session);
+  const contenders = firstPlace(ranking);
+  const { winnerId, splitTie } = choice ?? {};
+  if (choice) {
+    const chosen = typeof winnerId === "string" && contenders.some(({ id }) => id === winnerId);
+    assert(winnerId === undefined || chosen, 400, "Choose one of the tied players.");
+    assert(splitTie === undefined || splitTie === true, 400, "Choose whether to split the tie.");
+    assert(!splitTie || !chosen, 400, "Choose a winner or split the tie.");
+    assert(contenders.length === 1 ? !chosen && !splitTie : chosen || splitTie, 409,
+      contenders.length > 1 ? "Choose a winner or split the tie." : "This game has no first-place tie.");
+    if (chosen) ranking = [contenders.find(({ id }) => id === winnerId), ...ranking.filter(({ id }) => id !== winnerId)];
+  }
 
   const [winner] = ranking;
+  const winners = splitTie ? contenders : [winner];
   const { weights = [1, 2, 3], stake = 1 } = session.settlementConfig || {};
   const winnerOver20 = winner.total > 20;
 
   const deltaUnits = Object.fromEntries(session.players.map(({ id }) => [id, 0]));
-  const payouts = ranking.slice(1).map((loser, index) => {
-    const fixedWeight = Math.round(weights[index] * CONFIG_SCALE);
+  const payouts = ranking.slice(winners.length).flatMap((loser, index) => {
+    const fixedWeight = Math.round(weights[index + winners.length - 1] * CONFIG_SCALE);
     const fixedStake = Math.round(stake * CONFIG_SCALE);
     const multiplier = (winnerOver20 ? 2 : 1) * (loser.total < 0 ? 2 : 1);
     const amountUnits = fixedWeight * fixedStake * multiplier;
     deltaUnits[loser.id] -= amountUnits;
-    deltaUnits[winner.id] += amountUnits;
-    return {
-      fromPlayerId: loser.id,
-      toPlayerId: winner.id,
-      units: fixedWeight * multiplier / CONFIG_SCALE,
-      amount: balanceFromUnits(amountUnits),
-    };
+    const base = Math.floor(amountUnits / winners.length);
+    return winners.map(({ id }, winnerIndex) => {
+      const share = base + Number(winnerIndex < amountUnits % winners.length);
+      deltaUnits[id] += share;
+      return {
+        fromPlayerId: loser.id,
+        toPlayerId: id,
+        units: fixedWeight * multiplier / (CONFIG_SCALE * winners.length),
+        amount: balanceFromUnits(share),
+      };
+    });
   });
   const perPlayerDelta = Object.fromEntries(Object.entries(deltaUnits).map(([id, units]) =>
     [id, balanceFromUnits(units)]
   ));
 
   return {
-    totalsPoints: totals,
+    totalsPoints: pointTotals(session).totalsPoints,
     ranking,
     weights,
     stake,
@@ -204,5 +236,6 @@ export function computeFinalSettlement(session) {
     payouts,
     perPlayerDelta,
     perfectCounts: perfectCounts(session),
+    ...(choice ? { winnerIds: winners.map(({ id }) => id), tie: contenders.length > 1 ? (splitTie ? "split" : "selected") : null } : {}),
   };
 }

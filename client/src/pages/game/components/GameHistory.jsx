@@ -166,7 +166,7 @@ export default function GameHistory({
                 <tbody>
                   {standings.map((player, index) => (
                     <tr key={player.id}>
-                      <td style={tdStyle}>{index + 1}</td>
+                      <td style={tdStyle}>{history.settlement.winnerIds?.includes(player.id) ? 1 : index + 1}</td>
                       <td style={{ ...tdStyle, textAlign: "left" }}>{player.name}</td>
                       <td style={tdStyle}>{player.total.toFixed(1)}</td>
                     </tr>

@@ -60,6 +60,12 @@ td {
   align-items: center;
 }
 
+.tie-settlement { padding: 12px; margin-block: 10px; border: 1px solid #d6ac63; border-radius: 8px; background: #fff8e7; }
+.tie-settlement h3 { margin: 0; }
+.tie-actions { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.tie-actions label { display: grid; gap: 4px; }
+.tie-actions :is(select, button) { min-height: 44px; }
+
 .ledger-recovery {
   margin-top: 12px;
   max-width: 38rem;

@@ -1,6 +1,6 @@
 // src/pages/Home.jsx
 import React, { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { editorStorageKey, recoveryStorageKey, setupLedger } from "../api.js";
 
 export default function Home() {
@@ -98,6 +98,7 @@ export default function Home() {
 
   return (
     <div style={wrap}>
+      <Link to="/" style={{ color: "#253755" }}>Callbreak</Link>
       <h1>Callbreak Ledger</h1>
 
       <section style={card}>
