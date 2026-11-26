@@ -337,7 +337,8 @@ export class Ledger extends DurableObject<Env> {
           this.sql.exec("UPDATE ledger SET editor = ?, revision = ? WHERE id = 1", replacement!, revision);
         } else {
           if (typeof action !== "string") throw new HttpError(400, "Provide a ledger command.");
-          assert(!["record-online-round", "record-online-bids", "record-online-highbid", "abandon-online-round", "next-online-game"]
+          assert(!["record-online-round", "record-online-bids", "record-online-highbid", "abandon-online-round", "next-online-game",
+            "start-online-side", "score-online-side", "close-online-side"]
             .includes(action), 409, "Online games are recorded by the table.");
           if (action === "resolve-game") {
             assert(!getSummary(active).pendingTie.length, 409, "Choose a winner or split the tie in the ledger.");

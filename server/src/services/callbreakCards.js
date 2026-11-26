@@ -2,6 +2,10 @@ const SUITS = ["S", "H", "C", "D"];
 const RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "10", "J", "Q", "K", "A"];
 const DECK = SUITS.flatMap((suit) => RANKS.map((rank) => suit + rank));
 
+export const TRICK_SWEEP_MS = 1000;
+export const FINAL_TRICK_MS = 3200;
+export const FINAL_CARD_INTERVAL_MS = 450;
+
 export const nextSeat = (seat) => (seat + 1) % 4;
 export const seatPosition = (seat, viewer) => ["south", "east", "north", "west"][(seat - viewer + 4) % 4];
 

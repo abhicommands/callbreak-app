@@ -16,9 +16,10 @@ export default function GameTotals({ summary }) {
       </table>
       {summary.highBids?.length > 0 && (
         <ul className="high-bid-results" aria-label="High-bid outcomes">
-          {summary.highBids.map(({ bidderId, outcome, stake, round }, index) =>
-            <li key={index}>Deal {round} · {names.get(bidderId)} {outcome === "WIN" ? "won" : "lost"} the high bid
-              {" "}({formatBalance(stake)} per opponent)</li>)}
+          {summary.highBids.map(({ bidderId, outcome, stake, round, bid, total }, index) =>
+            <li key={index}>Deal {round} · {names.get(bidderId)} {outcome === "WIN" ? "won" : "lost"}
+              {" "}{bid == null ? `the high bid (${formatBalance(stake)} per opponent)` :
+                `${formatBalance(total)} on a call of ${bid}`}</li>)}
         </ul>
       )}
     </section>

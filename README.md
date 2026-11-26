@@ -43,7 +43,9 @@ The **Verify ledger** check runs a clean install, dependency audit, lint, scorin
 
 **Fast** allows 8 seconds to bid and 5 to play. **Standard** allows 20 and 15 seconds, **Relaxed** allows 35 and 25, and **Untimed** leaves both open. The host can set each timer independently. On timeout, the Worker chooses a bid from 1 to 4 or a random legal card. The clock pauses with the table when a seat goes offline and resumes with the remaining time.
 
-The default minimum combined bid is 9 and can be changed in the lobby. For every bid of 8 or more, the shared ledger posts the side payout as soon as the bidder reaches the bid or has too few tricks left to reach it. The deal still plays to 13 tricks and earns regular points. **Game totals** shows points and net payout for the current game. **Open ledger** shows round history and series balances.
+The default minimum combined bid is 9 and can be changed in the lobby. A bid of 8 or more turns the current hand into a side game led by the highest bidder. Tied bids go to the first of those bidders in the original bidding order. The side payout uses the sum of the three configured payouts times the stake, doubled for a call of 10 or more, and is split equally across the three opponents. The ledger posts it as soon as the call is made or becomes impossible. After all 13 tricks, the host resumes the same regular deal with fresh cards and the original dealer and bidding order. The last trick plays automatically one card at a time. Collected piles show trick counts.
+
+**Game totals** shows points and net payout for the current game. **Open ledger** shows round history and series balances.
 
 Payout presets are 1/2/3, 5/10/15, and 10/20/30. The host can enter custom amounts and a stake multiplier. Both modes use the same scoring, side-game transfers, and final settlement. For a first-place tie under the house ranking, the host or editor can choose a winner or split the lower places' payments among the tied winners. Tied winners do not pay each other. Games with substitutions retain individual scores and skip final settlement because the house payout calculation assumes a fixed roster of four.
 
