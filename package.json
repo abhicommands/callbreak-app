@@ -12,7 +12,7 @@
   "scripts": {
     "dev": "npm run build && wrangler dev --env \"\" --local --persist-to .wrangler/ledger-dev",
     "lint": "npm run lint -w client && tsc --noEmit",
-    "test": "npm run build && node --test test/scoring.test.js test/worker.test.js",
+    "test": "npm run build && node --test test/*.test.js",
     "test:browser": "npm run build && playwright test",
     "build": "npm run build -w client",
     "deploy:check": "wrangler deploy --dry-run",

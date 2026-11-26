@@ -10,7 +10,7 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     const viewerContext = await browser.newContext(devices[phone]);
     const editor = await editorContext.newPage();
     const viewer = await viewerContext.newPage();
-    await editor.goto(worker.origin);
+    await editor.goto(`${worker.origin}/ledger`);
     await editor.getByRole("button", { name: "Create Ledger" }).click();
     await expect(editor.getByText("Live sync: Online")).toBeVisible();
     await expect(editor.getByText(/Expires .+ unless you save another edit/)).toBeVisible();
@@ -99,8 +99,11 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
         document.documentElement.scrollWidth > window.innerWidth);
       expect(horizontalOverflow).toBe(false);
     }
-    await editor.getByRole("button", { name: "Resolve Game (apply payouts)" }).click();
-    await expect(viewer.getByRole("heading", { name: "This Game Settlement (Applied)" })).toBeVisible();
+    await expect(editor.getByRole("heading", { name: "First-place tie" })).toBeVisible();
+    await editor.getByRole("button", { name: "Keep tie and split winnings" }).click();
+    const settlement = viewer.getByRole("heading", { name: "This Game Settlement (Applied)" }).locator("..");
+    await expect(settlement.getByRole("row").filter({ hasText: "Player 3" }).getByRole("cell").first()).toHaveText("1");
+    await expect(settlement.getByRole("row").filter({ hasText: "Player 4" }).getByRole("cell").first()).toHaveText("1");
     await editor.getByRole("button", { name: "Start Next Game (carry payouts)" }).click();
     await expect(viewer.getByText("Game 2", { exact: true })).toBeVisible();
     expect(viewer.url()).toBe(shareLink);
@@ -114,12 +117,12 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     await expect(viewer.getByRole("heading", { name: "Final Totals" })).toBeVisible();
     await worker.stop();
     await worker.start();
-    await expect(viewer.getByText("Live sync: Online")).toBeVisible();
+    await expect(viewer.getByText("Live sync: Online")).toBeVisible({ timeout: 18_000 });
     await viewer.reload();
     await expect(viewer.getByText("Game 2", { exact: true })).toBeVisible();
 
     const copy = await viewerContext.newPage();
-    await copy.goto(worker.origin);
+    await copy.goto(`${worker.origin}/ledger`);
     await copy.getByLabel("Ledger backup").setInputFiles(backupPath);
     await copy.getByRole("button", { name: "Restore Backup" }).click();
     await expect(copy.getByText("Game 2", { exact: true })).toBeVisible();
@@ -137,7 +140,7 @@ test("an editor must review live changes before resubmitting a stale draft", asy
     await worker.start();
     const first = await browser.newPage();
     const second = await browser.newPage();
-    await first.goto(worker.origin);
+    await first.goto(`${worker.origin}/ledger`);
     await first.getByRole("button", { name: "Create Ledger" }).click();
     await first.getByText("Editor Access", { exact: true }).click();
     const token = await first.getByLabel("Private editor code").inputValue();

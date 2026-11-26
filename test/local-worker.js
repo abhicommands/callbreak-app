@@ -35,7 +35,7 @@ export async function localWorker({ idleSeconds } = {}) {
       let output = "";
       child = spawn(process.execPath, [
         "node_modules/wrangler/bin/wrangler.js", "dev", "--env", "", "--local",
-        "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence,
+        "--ip", "127.0.0.1", "--port", String(port), "--inspector-port", "0", "--persist-to", persistence,
         ...(idleSeconds ? ["--var", `LEDGER_IDLE_SECONDS:${idleSeconds}`] : []),
       ], {
         cwd: root, detached, stdio: ["ignore", "pipe", "pipe"],

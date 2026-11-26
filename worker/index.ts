@@ -9,8 +9,9 @@ import {
 import { HttpError, assert } from "../server/src/utils/errors.js";
 import {
   asObject, bearer, credential, digest, eventFromExport, failure, json, matches, payloadFor, readJson,
-  type Event,
+  type Event, type Payload,
 } from "./protocol";
+import { OnlineTable, TABLE_ROUTE } from "./onlineTable";
 
 interface Env {
   LEDGER: DurableObjectNamespace<Ledger>;
@@ -32,8 +33,9 @@ const IDLE_SECONDS = 24 * 60 * 60;
 const EXPIRY_KEY = "expiresAt";
 const EXPIRED_MESSAGE = "This ledger expired. Restore a backup from the home page to continue.";
 
-function snapshot(game: Game, revision: number, expiresAt: number | null) {
-  return { version: VERSION, revision, expiresAt, game: publicGame(game), summary: getSummary(game) };
+function snapshot(game: Game, revision: number, expiresAt: number | null, onlineTable = false) {
+  return { version: VERSION, revision, expiresAt, game: publicGame(game), summary: getSummary(game),
+    ...(onlineTable ? { onlineTable } : {}) };
 }
 
 function parseGame(data: string): Game {
@@ -41,6 +43,32 @@ function parseGame(data: string): Game {
 }
 
 export class Ledger extends DurableObject<Env> {
+  private table = new OnlineTable(this.ctx, {
+    exists: () => Boolean(this.findLedger()),
+    expiresAt: () => this.expiresAt(),
+    refresh: (txn, at) => this.refreshExpiry(txn, at, this.expiresAt()),
+    schedule: async (txn, deadline) => {
+      const expiry = this.expiresAt();
+      if (expiry === null) return;
+      const next = Math.min(expiry, deadline ?? expiry);
+      if (next !== await txn.getAlarm()) await txn.setAlarm(next);
+    },
+    write: (seriesId, action, payload, at) => this.writeOnlineLedger(seriesId, action, payload, at),
+    publish: () => {
+      const row = this.requireLedger();
+      this.broadcast(snapshot(parseGame(row.game), row.revision, this.expiresAt(), true));
+    },
+    backup: () => this.backup(),
+    snapshot: () => {
+      const row = this.findLedger();
+      return row ? snapshot(parseGame(row.game), row.revision, this.expiresAt(), true) : null;
+    },
+    pendingTie: () => {
+      const row = this.findLedger();
+      return Boolean(row && getSummary(parseGame(row.game)).pendingTie.length);
+    },
+  });
+
   private get sql() {
     return this.ctx.storage.sql;
   }
@@ -84,10 +112,22 @@ export class Ledger extends DurableObject<Env> {
     return row;
   }
 
+  private async refreshExpiry(txn: DurableObjectTransaction, at: number, current: number | null) {
+    const idleSeconds = Number(this.env.LEDGER_IDLE_SECONDS ?? IDLE_SECONDS);
+    assert(Number.isSafeInteger(idleSeconds) && idleSeconds > 0 && idleSeconds <= IDLE_SECONDS,
+      500, "Invalid ledger expiration configuration.");
+    const expiresAt = at + idleSeconds * 1000;
+    this.ctx.storage.kv.put(EXPIRY_KEY, expiresAt);
+    // The first alarm is committed with the saved state. Later saves only move the deadline.
+    if (current === null) await txn.setAlarm(expiresAt);
+    return expiresAt;
+  }
+
   async alarm() {
     const expiresAt = this.expiresAt();
     if (expiresAt === null) return;
     if (expiresAt > Date.now()) {
+      if (this.table.room) return this.table.alarm();
       await this.ctx.storage.setAlarm(expiresAt);
       return;
     }
@@ -115,6 +155,7 @@ export class Ledger extends DurableObject<Env> {
   private broadcast(view: ReturnType<typeof snapshot>) {
     const message = JSON.stringify(view);
     for (const socket of this.ctx.getWebSockets()) {
+      if (this.table.ownsSocket(socket)) continue;
       try {
         socket.send(message);
       } catch {
@@ -130,12 +171,24 @@ export class Ledger extends DurableObject<Env> {
     const row = this.requireLedger();
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.send(JSON.stringify(snapshot(parseGame(row.game), row.revision, this.expiresAt())));
+    server.send(JSON.stringify(snapshot(parseGame(row.game), row.revision, this.expiresAt(), Boolean(this.table.room))));
     return new Response(null, { status: 101, webSocket: client });
   }
 
-  webSocketMessage(socket: WebSocket) {
+  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+    if (this.table.ownsSocket(socket)) return this.table.socketMessage(socket, message);
     socket.close(1008, "Read-only connection");
+  }
+
+  webSocketClose(socket: WebSocket, code: number) {
+    if (socket.readyState === WebSocket.CLOSING) {
+      socket.close(code === 1005 || code === 1006 ? undefined : code);
+    }
+    if (this.table.ownsSocket(socket)) return this.table.socketClosed(socket);
+  }
+
+  webSocketError(socket: WebSocket) {
+    if (this.table.ownsSocket(socket)) return this.table.socketClosed(socket);
   }
 
   private history(gameId?: string) {
@@ -153,17 +206,42 @@ export class Ledger extends DurableObject<Env> {
       gameId: String(game_index), gameIndex: game_index, createdAt: created_at, settlementApplied: true,
     }));
     const { gameIndex, createdAt, settlementApplied } = active;
-    games.push({ gameId: active.gameId, gameIndex, createdAt, settlementApplied });
+    games.push({ gameId: active.gameId, gameIndex, createdAt,
+      settlementApplied: settlementApplied || ("settlementSkipped" in active && active.settlementSkipped === true) });
     return json({ currentGameId: active.gameId, games });
   }
 
   private async editorRead(request: Request, route: string) {
     const verifier = await digest(bearer(request));
-    assert(matches(verifier, this.requireLedger().editor), 403, "A valid editor credential is required.");
+    assert(!this.table.room && matches(verifier, this.requireLedger().editor), 403, "A valid editor credential is required.");
     if (route === "editor") return json({ authorized: true });
+    return this.backup();
+  }
+
+  private backup() {
     const events = Array.from(this.sql.exec<AuditRow>("SELECT * FROM audit ORDER BY revision"), (row) =>
       ({ ...row, payload: JSON.parse(row.payload) }));
     return json({ format: FORMAT, version: VERSION, events });
+  }
+
+  private writeOnlineLedger(seriesId: string, action: string, payload: Payload, at: number) {
+    const row = this.findLedger();
+    const revision = (row?.revision ?? 0) + 1;
+    const fields = payloadFor(action, payload);
+    if (action === "create") {
+      assert(!row, 409, "This ledger already exists.");
+      this.initializeSchema();
+      const game = createGame(seriesId, fields, at);
+      this.sql.exec("INSERT INTO ledger VALUES (1, ?, '', '', ?)", revision, JSON.stringify(game));
+    } else {
+      if (!row) throw new HttpError(404, "Ledger not found.");
+      assert(revision + (action === "next-online-game" ? 32 : 0) <= MAX_EVENTS, 409, "This ledger has reached its history limit.");
+      const active = parseGame(row.game);
+      const game = applyCommand(active, action, fields, at);
+      if (active !== game) this.archive(active);
+      this.sql.exec("UPDATE ledger SET revision = ?, game = ? WHERE id = 1", revision, JSON.stringify(game));
+    }
+    this.recordEvent({ revision, action, payload: fields, at });
   }
 
   private restore(seriesId: string, payload: unknown) {
@@ -208,6 +286,7 @@ export class Ledger extends DurableObject<Env> {
     if (replacement) assert(!matches(verifier, replacement), 400, "Use separate editor and recovery credentials.");
 
     const result = await this.ctx.storage.transaction(async (txn) => {
+      assert(!this.table.room, 409, "This ledger is updated by the online table.");
       const row = this.findLedger();
       const currentExpiry = row ? this.expiresAt() : null;
       if (row) {
@@ -230,10 +309,6 @@ export class Ledger extends DurableObject<Env> {
       }
       assert(previous < MAX_EVENTS, 409, "This ledger has reached its command limit.");
       const at = Date.now();
-      const idleSeconds = Number(this.env.LEDGER_IDLE_SECONDS ?? IDLE_SECONDS);
-      assert(Number.isSafeInteger(idleSeconds) && idleSeconds > 0 && idleSeconds <= IDLE_SECONDS,
-        500, "Invalid ledger expiration configuration.");
-      const expiresAt = at + idleSeconds * 1000;
       let revision = previous + 1;
       let game;
       if (route === "setup") {
@@ -248,6 +323,7 @@ export class Ledger extends DurableObject<Env> {
         } else {
           assert(action === "create", 400, "Choose create or restore.");
           const fields = payloadFor("create", payload);
+          assert(fields.mode === undefined, 400, "Create online ledgers from the table.");
           game = createGame(seriesId, fields, at);
           this.recordEvent({ revision, action: "create", payload: fields, at });
         }
@@ -261,6 +337,11 @@ export class Ledger extends DurableObject<Env> {
           this.sql.exec("UPDATE ledger SET editor = ?, revision = ? WHERE id = 1", replacement!, revision);
         } else {
           if (typeof action !== "string") throw new HttpError(400, "Provide a ledger command.");
+          assert(!["record-online-round", "record-online-bids", "record-online-highbid", "abandon-online-round", "next-online-game"]
+            .includes(action), 409, "Online games are recorded by the table.");
+          if (action === "resolve-game") {
+            assert(!getSummary(active).pendingTie.length, 409, "Choose a winner or split the tie in the ledger.");
+          }
           const fields = payloadFor(action, payload);
           game = applyCommand(active, action, fields, at);
           if (game !== active) this.archive(active);
@@ -269,10 +350,7 @@ export class Ledger extends DurableObject<Env> {
         }
       }
       this.sql.exec("INSERT INTO receipt VALUES (?, ?, ?)", key, revision, fingerprint);
-      this.ctx.storage.kv.put(EXPIRY_KEY, expiresAt);
-      // The first alarm and the ledger commit are atomic. Later saves move the deadline;
-      // the existing alarm wakes up at its original time and rechecks the saved deadline.
-      if (currentExpiry === null) await txn.setAlarm(expiresAt);
+      const expiresAt = await this.refreshExpiry(txn, at, currentExpiry);
       return { view: snapshot(game, revision, expiresAt), committedRevision: revision, replayed: false };
     });
 
@@ -282,7 +360,10 @@ export class Ledger extends DurableObject<Env> {
 
   async fetch(request: Request): Promise<Response> {
     try {
-      const match = new URL(request.url).pathname.match(ROUTE);
+      const { pathname } = new URL(request.url);
+      const table = pathname.match(TABLE_ROUTE);
+      if (table) return await this.table.fetch(request, table[1], table[2]);
+      const match = pathname.match(ROUTE);
       if (!match) return json({ error: "Route not found." }, 404);
       const [, seriesId, route = "snapshot", gameId] = match;
       if (gameId && route !== "history") return json({ error: "Route not found." }, 404);
@@ -292,7 +373,7 @@ export class Ledger extends DurableObject<Env> {
         if (route === "editor" || route === "export") return await this.editorRead(request, route);
         if (route === "snapshot") {
           const row = this.requireLedger();
-          return json(snapshot(parseGame(row.game), row.revision, this.expiresAt()));
+          return json(snapshot(parseGame(row.game), row.revision, this.expiresAt(), Boolean(this.table.room)));
         }
       }
       if (request.method === "POST" && ["setup", "command", "recover"].includes(route)) {
@@ -308,7 +389,7 @@ export class Ledger extends DurableObject<Env> {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
-    const match = url.pathname.match(ROUTE);
+    const match = url.pathname.match(ROUTE) ?? url.pathname.match(TABLE_ROUTE);
     if (!match) return json({ error: "API route not found." }, 404);
     const origin = request.headers.get("origin");
     if (origin && origin !== url.origin && (request.method !== "GET" || match[2] === "socket")) {

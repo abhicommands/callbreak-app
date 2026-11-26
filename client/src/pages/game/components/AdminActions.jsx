@@ -1,5 +1,6 @@
 import React from "react";
 import { btnStyle } from "./ui.js";
+import TieSettlement from "./TieSettlement.jsx";
 
 export default function AdminActions({
   isAdmin,
@@ -8,8 +9,10 @@ export default function AdminActions({
   settlementApplied,
   onResolveGame,
   onNextGame,
+  pendingTie,
 }) {
   if (!isAdmin) return null;
+  if (pendingTie.length) return <TieSettlement players={pendingTie} ready={!saving} onSettle={onResolveGame} />;
 
   return (
     <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
@@ -21,7 +24,7 @@ export default function AdminActions({
             border: `1px solid ${canResolve ? "#0a7" : "#9ca3af"}`,
           }}
           disabled={!canResolve || saving}
-          onClick={onResolveGame}
+          onClick={() => onResolveGame({})}
         >
           Resolve Game (apply payouts)
         </button>
