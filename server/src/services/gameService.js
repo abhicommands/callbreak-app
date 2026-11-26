@@ -22,6 +22,31 @@ export function isRecord(value) {
 export const HIGH_BID_MINIMUM = 8;
 export const highBidSeatIndices = (bids) => bids.flatMap((bid, index) => bid >= HIGH_BID_MINIMUM ? [index] : []);
 
+/**
+ * @template {string | number} Seat
+ * @param {Seat[]} order
+ * @param {(seat: Seat) => number | null} bidAt
+ * @returns {Seat | undefined}
+ */
+export function highestBidder(order, bidAt) {
+  let bidder;
+  let highest = HIGH_BID_MINIMUM - 1;
+  for (const seat of order) {
+    const bid = bidAt(seat) ?? 0;
+    if (bid <= highest) continue;
+    bidder = seat;
+    highest = bid;
+  }
+  return bidder;
+}
+
+export function sideGamePayout({ weights, stake }, bid) {
+  const pool = weights.reduce((total, weight) => total + Math.round(weight * 1000), 0) *
+    Math.round(stake * 1000) * (bid >= 10 ? 2 : 1);
+  return { total: balanceFromUnits(pool), shares: [0, 1, 2].map((index) =>
+    Math.floor(pool / 3) + Number(index < pool % 3)) };
+}
+
 export function highBidResult(bid, won, remaining) {
   if (won >= bid) return true;
   if (won + remaining < bid) return false;
@@ -142,6 +167,34 @@ function recordOnlineHighBid(game, { round, bidderId, won, remaining }, at) {
   applyHighBidOutcome(game, { round, bidderId, bidderWon: result }, at);
 }
 
+function startOnlineSide(game, { round, players, bids, bidderId }, at) {
+  assert(!game.onlineSide && !game.roundData[round], 409, "Finish the active deal first.");
+  prepareOnlineRound(game, round, players, bids);
+  const order = game.roundInfo[round].bidderOrder;
+  const firstHighest = highestBidder(order, (id) => bids[id]);
+  assert(firstHighest && firstHighest === bidderId, 400, "Choose the first highest bidder for the side game.");
+  game.onlineSide = { round, bidderId, bid: bids[bidderId], outcome: null };
+  pushRoundEvent(game, round, { type: "HIGH_BID_TRIGGERED", bids, bidderIds: [bidderId], dealerId: bidderId }, at);
+}
+
+function scoreOnlineSide(game, { round, won, remaining }, at) {
+  const side = game.onlineSide;
+  assert(side?.round === round && side.outcome === null, 409, "No undecided side game.");
+  assert(Number.isInteger(won) && Number.isInteger(remaining) && won >= 0 && remaining >= 0 && won + remaining <= 13,
+    400, "Invalid trick count.");
+  const bidderWon = highBidResult(side.bid, won, remaining);
+  assert(bidderWon !== null, 409, "The side game is undecided.");
+  applyHighBidOutcome(game, { round, bidderId: side.bidderId, bidderWon, bid: side.bid }, at);
+  side.outcome = bidderWon ? "WIN" : "LOSS";
+}
+
+function closeOnlineSide(game, { round, canceled }, at) {
+  const side = game.onlineSide;
+  assert(side?.round === round && (canceled === true || side.outcome !== null), 409, "Finish the side game first.");
+  if (canceled === true && !side.outcome) pushRoundEvent(game, round, { type: "HIGH_BID_CANCELED", dealerId: side.bidderId }, at);
+  delete game.onlineSide;
+}
+
 function recordOnlineRound(game, { round, players, bids, actuals }, at) {
   const locked = game.roundData[round];
   prepareOnlineRound(game, round, players, bids);
@@ -235,16 +288,21 @@ function closeHighBid(game, payload, at, canceled) {
   game.highBid = null;
 }
 
-function highBidTransfers({ bidderId, stake, outcome, opponentIds }) {
-  return opponentIds.map((opponent) => outcome === "WIN" ? [opponent, bidderId, stake] : [bidderId, opponent, stake]);
+function highBidTransfers({ bidderId, stake, outcome, opponentIds, shares }) {
+  return opponentIds.map((opponent, index) => {
+    const units = shares?.[index] ?? Math.round(stake * 1_000_000);
+    return outcome === "WIN" ? [opponent, bidderId, units] : [bidderId, opponent, units];
+  });
 }
 
-function applyHighBidOutcome(game, { round, bidderId, bidderWon, stake = game.settlementConfig.stake }, at) {
+function applyHighBidOutcome(game, { round, bidderId, bidderWon, stake = game.settlementConfig.stake, bid }, at) {
   assert(typeof bidderWon === "boolean", 400, "Choose whether the bidder won.");
   assert(validAmount(stake, 0.001), 400, "Stake must be positive, up to 10000 with up to 3 decimal places.");
+  const payout = bid === undefined ? null : sideGamePayout(game.settlementConfig, bid);
   const event = { type: "HIGH_BID_RESOLVED", bidderId, stake, outcome: bidderWon ? "WIN" : "LOSS",
-    opponentIds: game.players.filter(({ id }) => id !== bidderId).map(({ id }) => id) };
-  for (const [from, to, amount] of highBidTransfers(event)) transfer(game, from, to, Math.round(amount * 1_000_000));
+    opponentIds: game.players.filter(({ id }) => id !== bidderId).map(({ id }) => id),
+    ...(payout && { bid, total: payout.total, shares: payout.shares, dealerId: bidderId }) };
+  for (const [from, to, units] of highBidTransfers(event)) transfer(game, from, to, units);
   pushRoundEvent(game, round, event, at);
 }
 
@@ -306,6 +364,9 @@ function settle(game, at, choice = null) {
 }
 
 const actions = {
+  "start-online-side": startOnlineSide,
+  "score-online-side": scoreOnlineSide,
+  "close-online-side": closeOnlineSide,
   "record-online-bids": recordOnlineBids,
   "record-online-highbid": recordOnlineHighBid,
   "abandon-online-round"(game, { round }, at) {
@@ -340,8 +401,10 @@ export function applyCommand(game, action, payload, at) {
       return newGame(game.seriesId, game.gameIndex + 1, { ...game, ...roster },
         roster.players[startDealerIndex].id, at);
     }
-    assert(["record-online-round", "record-online-bids", "record-online-highbid", "abandon-online-round", "settle-game"].includes(action),
+    assert(["record-online-round", "record-online-bids", "record-online-highbid", "abandon-online-round", "settle-game",
+      "start-online-side", "score-online-side", "close-online-side"].includes(action),
       409, "This ledger is updated by the online table.");
+    assert(!game.onlineSide || ["score-online-side", "close-online-side"].includes(action), 409, "Finish the side game first.");
   }
   if (action === "next-game") {
     assert(game.settlementApplied, 409, "Settle the game before starting the next one.");
@@ -370,9 +433,8 @@ export function getSummary(game) {
   const highBids = Object.values(game.roundEvents).flat().filter(({ type }) => type === "HIGH_BID_RESOLVED");
   const gameUnits = Object.fromEntries(payoutEntries.map(([id]) => [id, 0]));
   const fromSettlement = (game.lastSettlementResult?.payouts ?? [])
-    .map(({ fromPlayerId, toPlayerId, amount }) => [fromPlayerId, toPlayerId, amount]);
-  for (const [from, to, amount] of [...highBids.flatMap(highBidTransfers), ...fromSettlement]) {
-    const units = Math.round(amount * 1_000_000);
+    .map(({ fromPlayerId, toPlayerId, amount }) => [fromPlayerId, toPlayerId, Math.round(amount * 1_000_000)]);
+  for (const [from, to, units] of [...highBids.flatMap(highBidTransfers), ...fromSettlement]) {
     gameUnits[from] -= units;
     gameUnits[to] += units;
   }

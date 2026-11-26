@@ -149,7 +149,7 @@ function Room({ tableId }) {
   const recovery = localStorage.getItem(hostKey(tableId));
   const path = tablePath(tableId);
   const ready = connected && !busy;
-  const between = ["lobby", "between", "finished"].includes(view?.phase);
+  const between = ["lobby", "between", "finished", "side-result"].includes(view?.phase);
   const seated = view?.seat >= 0;
   const inGame = view?.round > 0 && seated;
 

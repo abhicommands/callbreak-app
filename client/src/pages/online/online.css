@@ -213,11 +213,21 @@
   opacity: 0;
   animation: sweep-trick var(--sweep-length) var(--sweep-delay) cubic-bezier(0.3, 0, 0.55, 1) forwards;
 }
+.final-sweep .trick-card { animation-name: sweep-final; }
+.final-sweep .sweep-face {
+  opacity: 0;
+  animation: deal-card-in 230ms var(--face-delay) ease-out forwards;
+}
 .trick-north { top: 0; left: 50%; translate: -50% -12%; --from-y: -38px; }
 .trick-west { top: 50%; left: 0; translate: -7% -50%; --from-x: -38px; }
 .trick-east { top: 50%; right: 0; translate: 7% -50%; --from-x: 38px; }
 .trick-south { bottom: 0; left: 50%; translate: -50% 12%; --from-y: 38px; }
 .trick-winner .playing-card { box-shadow: 0 0 0 2px var(--felt-gold), 0 4px 8px #12224399; }
+.final-sweep .trick-winner .playing-card {
+  box-shadow: 0 4px 8px #12224399;
+  animation: final-winner 180ms var(--winner-delay) ease-out forwards;
+}
+@keyframes final-winner { to { box-shadow: 0 0 0 2px var(--felt-gold), 0 4px 8px #12224399; } }
 .online-page .won-pile {
   position: absolute;
   right: 0;
@@ -226,13 +236,13 @@
   align-items: center;
   justify-content: center;
   gap: 3px;
-  min-width: 44px;
+  min-width: 32px;
   padding: 0 4px;
   border: 1px solid transparent;
   background: transparent;
   color: #e1e9fa;
   font: 750 0.75rem/1 system-ui, sans-serif;
-  -webkit-tap-highlight-color: transparent;
+  pointer-events: none;
 }
 .match-seat-south .won-pile { top: auto; bottom: 100%; }
 .won-pile-cards { display: grid; width: 22px; height: 20px; place-items: center; }
@@ -249,23 +259,6 @@
 .won-pile-cards i:last-child { transform: translateX(2px) rotate(10deg); }
 .won-pile-latest .won-pile-cards i { border-color: #ffd884; box-shadow: 0 0 7px #ffd884a0; }
 .online-page .won-pile-latest { color: #ffda88; }
-.trick-collection {
-  width: min(420px, calc(100% - 24px));
-  max-height: 84vh;
-  padding: 14px;
-  color: #f3f6ff;
-  background: #1b2941;
-  border: 1px solid #607698;
-  border-radius: 12px;
-}
-.trick-collection::backdrop { background: #101b2ac0; }
-.trick-collection-heading { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.trick-collection-heading h2 { margin: 0; }
-.trick-collection-heading button { flex: none; white-space: nowrap; }
-.trick-collection ol { list-style: none; margin: 12px 0 0; padding: 0; }
-.trick-collection li { margin-block: 10px; }
-.trick-collection li > div { display: grid; grid-template-columns: repeat(4, minmax(0, 54px)); gap: 5px; margin-top: 5px; }
-.trick-collection .playing-card { min-height: 54px; }
 .online-page .match-notice { margin: 5px 4px; color: #ffdeb0; font-size: 0.8rem; }
 .match-hand { min-width: 0; padding: 5px 10px 12px; }
 .match-hand-heading { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin: 6px 1px 9px; }
@@ -325,6 +318,11 @@
   88% { opacity: 1; }
   100% { opacity: 0; transform: translate(var(--collect-x, 0px), var(--collect-y, 0px)) scale(0.28); }
 }
+@keyframes sweep-final {
+  0%, 82% { opacity: 1; transform: translate(0, 0); }
+  94% { opacity: 1; }
+  100% { opacity: 0; transform: translate(var(--collect-x, 0px), var(--collect-y, 0px)) scale(0.28); }
+}
 @keyframes fade-trick {
   0%, 48% { opacity: 1; }
   100% { opacity: 0; }
@@ -361,5 +359,9 @@
 @media (prefers-reduced-motion: reduce) {
   .trick-card { animation: none; }
   .trick-sweep .trick-card { animation-name: fade-trick; }
+  .final-sweep .trick-card { animation-name: fade-final; }
+  .final-sweep .sweep-face { animation-name: reveal-face; }
   .online-page .match-cards .playing-card { animation: none; transition: none; }
 }
+@keyframes reveal-face { to { opacity: 1; } }
+@keyframes fade-final { 0%, 88% { opacity: 1; } 100% { opacity: 0; } }

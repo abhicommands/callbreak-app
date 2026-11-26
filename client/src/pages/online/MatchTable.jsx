@@ -1,11 +1,10 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { seatPosition } from "../../../../server/src/services/callbreakCards.js";
+import { FINAL_CARD_INTERVAL_MS, FINAL_TRICK_MS, seatPosition, TRICK_SWEEP_MS } from "../../../../server/src/services/callbreakCards.js";
 import GameTotals from "../game/components/GameTotals.jsx";
 import TieSettlement from "../game/components/TieSettlement.jsx";
 
 const RANKS = { A: "Ace", K: "King", Q: "Queen", J: "Jack" };
 const SUITS = { S: ["♠", "Spades"], H: ["♥", "Hearts"], D: ["♦", "Diamonds"], C: ["♣", "Clubs"] };
-const COLLECTION_MS = 1000;
 
 function PlayingCard({ card, playable, highlighted, onPlay, table, style }) {
   const [symbol, suit] = SUITS[card[0]];
@@ -70,7 +69,7 @@ function TurnClock({ clock, serverOffset }) {
     aria-label={`${seconds} seconds ${deadline == null ? "paused" : "left"}`}>{seconds}</span>;
 }
 
-function MatchSeat({ player, position, mine, dealer, turn, clock, serverOffset, active, taken, lastWon, inspect }) {
+function MatchSeat({ player, position, mine, dealer, turn, clock, serverOffset, active, lastWon }) {
   const name = player?.name || "Open seat";
   const initials = player?.name.trim().split(/\s+/).slice(0, 2).map((word) => Array.from(word)[0]).join("") ?? "–";
   return (
@@ -84,11 +83,11 @@ function MatchSeat({ player, position, mine, dealer, turn, clock, serverOffset, 
           {player.wins}<span> / {player.bid ?? "–"}</span></span>}
       </div>
       {!mine && player?.cards > 0 && <span aria-hidden="true" className="seat-card-backs"><i /><i /><i /></span>}
-      {taken.length > 0 && (
-        <button type="button" className={`won-pile${lastWon ? " won-pile-latest" : ""}`}
-          aria-label={`View ${name}'s collected tricks (${taken.length})`} onClick={inspect}>
-          <span aria-hidden="true" className="won-pile-cards"><i /><i /></span><span>{taken.length}</span>
-        </button>
+      {player?.wins > 0 && (
+        <span className={`won-pile${lastWon ? " won-pile-latest" : ""}`}
+          role="img" aria-label={`${name}, ${player.wins} tricks won`}>
+          <span aria-hidden="true" className="won-pile-cards"><i /><i /></span><span>{player.wins}</span>
+        </span>
       )}
       {turn && <TurnClock clock={clock} serverOffset={serverOffset} />}
     </div>
@@ -97,8 +96,9 @@ function MatchSeat({ player, position, mine, dealer, turn, clock, serverOffset, 
 
 function TrickSweep({ trick, winnerPosition, winnerName, position, serverOffset, delay = 0 }) {
   const stage = useRef(null);
+  const duration = trick.automatic ? FINAL_TRICK_MS : TRICK_SWEEP_MS;
   const [elapsed] = useState(() => performance.now() + serverOffset - trick.completedAt - delay);
-  const [done, setDone] = useState(() => elapsed >= COLLECTION_MS);
+  const [done, setDone] = useState(() => elapsed >= duration);
 
   useLayoutEffect(() => {
     if (done) return;
@@ -111,44 +111,24 @@ function TrickSweep({ trick, winnerPosition, winnerName, position, serverOffset,
         card.style.setProperty("--collect-y", `${target.y + target.height / 2 - start.y - start.height / 2}px`);
       }
     }
-    const timer = setTimeout(() => setDone(true), COLLECTION_MS - elapsed);
+    const timer = setTimeout(() => setDone(true), duration - elapsed);
     return () => clearTimeout(timer);
-  }, [done, elapsed, winnerPosition]);
+  }, [done, duration, elapsed, winnerPosition]);
 
   if (done) return null;
   return (
-    <div className="felt-trick trick-sweep" ref={stage} data-collect-seat={winnerPosition}
+    <div className={`felt-trick trick-sweep${trick.automatic ? " final-sweep" : ""}`} ref={stage} data-collect-seat={winnerPosition}
       role="group" aria-label={`Collecting trick ${trick.number} for ${winnerName}`}
-      style={{ "--sweep-delay": `${-elapsed}ms`, "--sweep-length": `${COLLECTION_MS}ms` }}>
-      {trick.plays.map(({ seat, card }) => (
+      style={{ "--sweep-delay": `${-elapsed}ms`, "--sweep-length": `${duration}ms`,
+        "--winner-delay": `${(trick.plays.length - 1) * FINAL_CARD_INTERVAL_MS + 230 - elapsed}ms` }}>
+      {trick.plays.map(({ seat, card }, index) => (
         <div key={card} className={`trick-card trick-${position(seat)}${seat === trick.winner ? " trick-winner" : ""}`}>
-          <PlayingCard card={card} />
+          <div className="sweep-face" style={{ "--face-delay": `${index * FINAL_CARD_INTERVAL_MS - elapsed}ms` }}>
+            <PlayingCard card={card} />
+          </div>
         </div>
       ))}
     </div>
-  );
-}
-
-function TrickCollection({ name, tricks, close }) {
-  const dialog = useRef(null);
-  useEffect(() => {
-    dialog.current.showModal();
-  }, []);
-  return (
-    <dialog className="trick-collection" ref={dialog} aria-label={`${name}'s collected tricks`} onClose={close}>
-      <div className="trick-collection-heading">
-        <h2>{name}'s collected tricks</h2>
-        <button className="online-secondary" type="button" onClick={() => dialog.current.close()}>Close</button>
-      </div>
-      <ol>
-        {tricks.map(({ number, plays }) => (
-          <li key={number}>
-            <span>Trick {number}</span>
-            <div>{plays.map(({ card }) => <PlayingCard key={card} card={card} />)}</div>
-          </li>
-        ))}
-      </ol>
-    </dialog>
   );
 }
 
@@ -234,27 +214,32 @@ function DealResults({ snapshot, view, next, command, ready }) {
 export default function MatchTable({ view, ready, command, serverOffset }) {
   const snapshot = view.scores;
   const felt = useRef(null);
-  const [collection, setCollection] = useState(null);
-  const { seat, turn, phase, hand, legal, round, trick, lastTrick, seats, previousBidTotal, lastAuto, taken = [] } = view;
+  const [released, setReleased] = useState(0);
+  const { seat, turn, phase, hand, legal, round, trick, lastTrick, seats, previousBidTotal, lastAuto,
+    penultimate, lastWinnerId, revealUntil, side } = view;
   const active = phase === "bidding" || phase === "playing";
   const fourOnline = seats.every((player) => player?.online);
   const yourTurn = active && turn === seat;
   const canAct = ready && fourOnline && yourTurn;
   const position = (index) => seatPosition(index, seat);
   const trickNumber = seats.reduce((count, player) => count + (player?.wins ?? 0), 0);
-  const tricksFor = (playerId) => taken.filter((item) => item.winnerId === playerId);
-  const inspectedPlayer = collection?.round === round && seats.find((player) => player?.id === collection.id);
   const offset = serverOffset ?? view.serverOffset ?? 0;
-  const sweeps = lastTrick?.automatic ? taken.slice(-2) : lastTrick?.completedAt ? [lastTrick] : [];
+  const revealing = !active && revealUntil > view.now && released !== revealUntil;
+  const sweeps = [penultimate, lastTrick].filter(Boolean);
+  useEffect(() => {
+    if (!revealing) return;
+    const timer = setTimeout(() => setReleased(revealUntil), Math.max(0, revealUntil - performance.now() - offset));
+    return () => clearTimeout(timer);
+  }, [offset, revealUntil, revealing]);
   const prompt = active
     ? !fourOnline ? "Player offline. Waiting for reconnect."
       : yourTurn ? (phase === "bidding" ? "Your turn to bid" : "Your turn to play")
         : `${seats[turn]?.name} to ${phase === "bidding" ? "bid" : "play"}`
-    : phase === "between" ? "Deal complete" : "Game complete";
+    : revealing ? "Final trick" : phase === "side-result" ? "Side game complete" : phase === "between" ? "Deal complete" : "Game complete";
   const next = view.host && (
     <button disabled={!ready || !fourOnline || Boolean(snapshot?.summary.pendingTie?.length)}
       onClick={() => command(phase === "finished" ? "rematch" : "next")}>
-      {phase === "finished" ? "Play again" : "Deal next round"}
+      {phase === "finished" ? "Play again" : phase === "side-result" ? "Resume regular deal" : "Deal next round"}
     </button>
   );
 
@@ -263,7 +248,8 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
       <div className={`match-layout${active ? " match-live" : ""}`}>
         <section className="match-surface" aria-label="Table">
           <div className="match-status">
-            <span>Game {view.gameIndex} · Deal {round}/5</span>
+            <span>{side ? `Side game · ${seats[side.bidder]?.name ?? "Bidder"} called ${side.bid}` :
+              `Game ${view.gameIndex} · Deal ${round}/5`}</span>
             <strong role="status">{prompt}</strong>
           </div>
           <div className="card-felt" ref={felt}>
@@ -275,17 +261,15 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
                 </div>
               ))}
             </div>
-            {sweeps.map((completed, index) => (
+            {sweeps.map((completed) => (
               <TrickSweep key={`${round}:${completed.number}`} trick={completed} winnerPosition={position(completed.winner)}
                 winnerName={seats[completed.winner]?.name} position={position} serverOffset={offset}
-                delay={index * COLLECTION_MS} />
+                delay={completed.automatic ? TRICK_SWEEP_MS : 0} />
             ))}
             {seats.map((player, index) => (
               <MatchSeat key={index} player={player} position={position(index)} mine={index === seat}
                 dealer={index === view.dealer} turn={active && index === turn} clock={view.clock}
-                serverOffset={offset} active={active} taken={player ? tricksFor(player.id) : []}
-                lastWon={Boolean(player && lastTrick?.winnerId === player.id)}
-                inspect={() => setCollection({ id: player.id, round })} />
+                serverOffset={offset} active={active} lastWon={Boolean(!revealing && player && lastWinnerId === player.id)} />
             ))}
             {phase === "bidding" && yourTurn && <BidPicker ready={canAct} command={command} />}
           </div>
@@ -311,9 +295,12 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
           </section>
         )}
       </div>
-      {inspectedPlayer && <TrickCollection name={inspectedPlayer.name} tricks={tricksFor(inspectedPlayer.id)}
-        close={() => setCollection(null)} />}
-      {active ? <LiveStandings seats={seats} /> : <DealResults snapshot={snapshot} view={view} next={next} command={command} ready={ready} />}
+      {active ? <LiveStandings seats={seats} /> : !revealing && (
+        phase === "side-result" ? <section className="online-panel match-results" aria-label="Side game results">
+          <div className="match-results-heading"><h2>Side game results</h2>{next}</div>
+          <p>{side.outcome === "WIN" ? "High call made" : "High call missed"}. Regular deal {round} keeps its dealer.</p>
+        </section> : <DealResults snapshot={snapshot} view={view} next={next} command={command} ready={ready} />
+      )}
       {snapshot && <GameTotals summary={snapshot.summary} />}
     </>
   );

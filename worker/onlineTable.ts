@@ -1,5 +1,6 @@
-import { dealHands, legalCards, nextSeat, randomIndex, shuffled, winningPlay } from "../server/src/services/callbreakCards.js";
-import { highBidResult, highBidSeatIndices } from "../server/src/services/gameService.js";
+import { dealHands, FINAL_TRICK_MS, legalCards, nextSeat, randomIndex, shuffled, TRICK_SWEEP_MS,
+  winningPlay } from "../server/src/services/callbreakCards.js";
+import { highBidResult, highBidSeatIndices, highestBidder } from "../server/src/services/gameService.js";
 import { DEFAULT_MINIMUM_BID, tableSettings } from "../server/src/services/tableSettings.js";
 import { HttpError, assert } from "../server/src/utils/errors.js";
 import { asObject, bearer, credential, digest, json, matches, readJson, type Payload } from "./protocol";
@@ -20,7 +21,9 @@ type CompletedTrick = { plays: Play[]; winner: number; winnerId: string; number:
 type Clock = { deadline: number | null; remainingMs: number; limitMs: number };
 type Deal = {
   hands: string[][]; bids: (number | null)[]; wins: number[]; turn: number;
-  trick: Play[]; lastTrick: CompletedTrick | null; taken?: CompletedTrick[];
+  trick: Play[]; lastTrick: CompletedTrick | null; penultimate?: CompletedTrick;
+  taken?: CompletedTrick[];
+  side?: { bidder: number; bid: number; outcome: "WIN" | "LOSS" | null };
   attempts: number; previousBidTotal: number | null;
   clock?: Clock | null;
   lastAuto?: { seat: number; action: "bid" | "play"; value: number | string } | null;
@@ -29,7 +32,7 @@ type Deal = {
 };
 type Common = { name: string; host: string; recovery: string; revision: number; hasLedger: boolean };
 type Active = Common & {
-  phase: "lobby" | "bidding" | "playing" | "between" | "finished";
+  phase: "lobby" | "bidding" | "playing" | "between" | "finished" | "side-result";
   seats: (Player | null)[]; pending: JoinRequest[]; round: number; dealer: number;
   deal: Deal | null; nextPlayer: number;
   seriesId?: string; gameIndex?: number; settings?: ReturnType<typeof tableSettings>;
@@ -51,7 +54,7 @@ type LedgerAccess = {
   backup(): Response;
 };
 
-const betweenDeals = (room: Active) => ["lobby", "between", "finished"].includes(room.phase);
+const betweenDeals = (room: Active) => ["lobby", "between", "finished", "side-result"].includes(room.phase);
 const midDeal = (room: Active) => room.phase === "bidding" || room.phase === "playing";
 const occupied = (room: Active) => room.seats.filter((player): player is Player => player !== null);
 const allOnline = (room: Active, live: Set<string>) => room.seats.every((player) => player && live.has(player.token));
@@ -63,6 +66,8 @@ const alarmDeadline = (room: Room) => {
   const deadline = turnClock(room)?.deadline;
   return deadline == null ? deadline : deadline + DELIVERY_GRACE_MS;
 };
+const revealUntil = (deal: Deal | null) => deal?.lastTrick?.automatic ?
+  deal.lastTrick.completedAt + TRICK_SWEEP_MS + FINAL_TRICK_MS : 0;
 
 function appendCard(deal: Deal, seat: number, card: string) {
   const hand = deal.hands[seat];
@@ -120,17 +125,24 @@ export class OnlineTable {
     const deal = room.deal;
     const canPlay = Boolean(deal && room.phase === "playing" && deal.turn === seat && online.every(Boolean));
     const now = Date.now();
+    const last = deal?.lastTrick;
+    const until = revealUntil(deal);
+    const revealed = last && now < (until || last.completedAt + TRICK_SWEEP_MS) ? last : null;
     return {
-      ...header, seat, turnVersion: turnVersion(room), round: room.round, dealer: room.dealer,
+      ...header, seat, turnVersion: turnVersion(room), round: room.round, dealer: deal?.side?.bidder ?? room.dealer,
+      regularDealer: room.dealer, side: deal?.side, revealUntil: until,
       gameIndex: room.gameIndex ?? Number(room.hasLedger),
       settings: room.settings, now,
       pending: room.pending.some((entry) => entry.token === token && entry.until > now),
       requests: host ? room.pending.filter((entry) => entry.until > now).map(({ id, name }) => ({ id, name })) : [],
       seats: room.seats.map((player, index) => player && {
         id: player.id, name: player.name, host: player.token === room.host, online: online[index],
-        bid: deal?.bids[index] ?? null, wins: deal?.wins[index] ?? 0, cards: deal?.hands[index].length ?? 0,
+        bid: deal?.side && deal.side.bidder !== index ? null : deal?.bids[index] ?? null,
+        wins: deal?.wins[index] ?? 0, cards: deal?.hands[index].length ?? 0,
       }),
-      turn: deal?.turn, trick: deal?.trick ?? [], lastTrick: deal?.lastTrick, taken: deal?.taken ?? [],
+      turn: deal?.turn, trick: deal?.trick ?? [], lastTrick: revealed, lastWinnerId: last?.winnerId,
+      penultimate: revealed?.automatic && deal?.penultimate &&
+        now < deal.penultimate.completedAt + TRICK_SWEEP_MS ? deal.penultimate : undefined,
       attempts: deal?.attempts, previousBidTotal: deal?.previousBidTotal,
       clock: turnClock(room), lastAuto: deal?.lastAuto,
       hand: seat >= 0 ? deal?.hands[seat] ?? [] : [],
@@ -323,6 +335,15 @@ export class OnlineTable {
       return false;
     }
     room.phase = "playing";
+    const order = [1, 2, 3, 4].map((offset) => (room.dealer + offset) % 4);
+    const high = highestBidder(order, (index) => deal.bids[index]);
+    if (high !== undefined) {
+      deal.side = { bidder: high, bid: deal.bids[high]!, outcome: null };
+      deal.turn = high;
+      this.ledger.write(seriesId, "start-online-side",
+        { round: room.round, bidderId: room.seats[high]!.id, ...this.ledgerBids(room, deal) }, at);
+      return true;
+    }
     return this.bookBids(room, deal, seriesId, at);
   }
 
@@ -332,7 +353,7 @@ export class OnlineTable {
   }
 
   private bookBids(room: Active, deal: Deal, id: string, at: number) {
-    if (deal.ledgerBids) return false;
+    if (deal.ledgerBids || deal.side) return false;
     this.ledger.write(id, "record-online-bids", { round: room.round, ...this.ledgerBids(room, deal) }, at);
     deal.ledgerBids = true;
     return true;
@@ -348,6 +369,7 @@ export class OnlineTable {
 
     const scored = this.completeTrick(room, deal, id, at);
     if (deal.hands.every((hand) => hand.length === 1)) {
+      deal.penultimate = deal.lastTrick ?? undefined;
       for (let index = 0; index < 4; index++) appendCard(deal, deal.turn, deal.hands[deal.turn][0]);
       return this.completeTrick(room, deal, id, at, true);
     }
@@ -360,9 +382,24 @@ export class OnlineTable {
     const remaining = deal.hands[winner].length;
     deal.lastTrick = { plays: deal.trick, winner, winnerId: room.seats[winner]!.id,
       number: 13 - remaining, completedAt: at, ...(automatic ? { automatic: true } : {}) };
-    (deal.taken ??= []).push(deal.lastTrick);
+    delete deal.taken;
     deal.trick = [];
     deal.turn = winner;
+    if (deal.side) {
+      const side = deal.side;
+      const won = deal.wins[side.bidder];
+      const result = highBidResult(side.bid, won, remaining);
+      let changed = false;
+      if (side.outcome === null && result !== null) {
+        this.ledger.write(id, "score-online-side", { round: room.round, won, remaining }, at);
+        side.outcome = result ? "WIN" : "LOSS";
+        changed = true;
+      }
+      if (remaining) return changed;
+      this.ledger.write(id, "close-online-side", { round: room.round }, at);
+      room.phase = "side-result";
+      return true;
+    }
     deal.settledBids ??= [];
     let ledgerChanged = false;
     for (const bidder of highBidSeatIndices(deal.bids)) {
@@ -407,8 +444,9 @@ export class OnlineTable {
     assert(host, 403, "Only the host can manage this table.");
     if (action === "end") {
       const { name, host, recovery, revision, hasLedger } = room;
-      const abandoned = midDeal(room) && Boolean(room.deal?.ledgerBids);
-      if (abandoned) this.ledger.write(id, "abandon-online-round", { round: room.round }, at);
+      const abandoned = midDeal(room) && Boolean(room.deal?.ledgerBids || room.deal?.side);
+      if (abandoned) this.ledger.write(id, room.deal?.side ? "close-online-side" : "abandon-online-round",
+        room.deal?.side ? { round: room.round, canceled: true } : { round: room.round }, at);
       return { room: { name, host, recovery, revision, hasLedger, phase: "ended" } satisfies Room, ledgerChanged: abandoned };
     }
     if (action === "settle") {
@@ -423,7 +461,9 @@ export class OnlineTable {
     }
     if (action === "start" || action === "next" || action === "rematch") {
       const available = { start: "lobby", next: "between", rematch: "finished" } as const;
-      assert(room.phase === available[action], 409, "You cannot start a deal right now.");
+      const resumeRegular = action === "next" && room.phase === "side-result";
+      assert(room.phase === available[action] || resumeRegular, 409, "You cannot start a deal right now.");
+      assert(revealUntil(room.deal) <= at, 409, "The final trick is still being shown.");
       assert(allOnline(room, live), 409, "All four players must be connected.");
       if (action !== "next") {
         const players = shuffled(occupied(room)) as Player[];
@@ -445,7 +485,7 @@ export class OnlineTable {
             startDealerIndex: room.dealer,
           }, at);
         }
-      } else {
+      } else if (!resumeRegular) {
         room.round++;
         room.dealer = nextSeat(room.dealer);
       }
@@ -590,6 +630,7 @@ export class OnlineTable {
       updated.revision++;
       if (updated.phase !== "ended") {
         updated.seriesId ??= id;
+        if (updated.deal) delete updated.deal.taken;
         this.alignClock(updated, this.liveTokens(), at);
       }
       this.ctx.storage.kv.put(TABLE_KEY, updated);

@@ -155,16 +155,23 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
         const winner = await sweep.getAttribute("data-collect-seat");
         const pile = table(host).locator(`[data-seat="${winner}"] .won-pile`);
         await expect(pile).toHaveClass(/won-pile-latest/);
+        await expect(pile).toHaveAttribute("role", "img");
         await expect(sweep).toHaveCount(0);
         await expect(table(host).locator(".felt-current-trick .trick-card")).toHaveCount(0);
-        await pile.tap();
-        const collection = host.getByRole("dialog", { name: /collected tricks/ });
-        await expect(collection.getByRole("img")).toHaveCount(4);
-        await collection.getByRole("button", { name: "Close" }).tap();
+        await expect(table(host).locator("button.won-pile, .won-pile[tabindex]")).toHaveCount(0);
+        await expect(host.getByRole("dialog")).toHaveCount(0);
       }
     }
     expect(sawRestrictedHand).toBe(true);
-    await expect(host.getByRole("heading", { name: "Deal 1 results" })).toBeVisible();
+    const finalTrick = table(host).locator(".final-sweep");
+    await expect(table(host).getByText("Final trick", { exact: true })).toBeVisible();
+    await expect(finalTrick.locator(".sweep-face")).toHaveCount(4);
+    const delays = await finalTrick.locator(".sweep-face").evaluateAll((faces) =>
+      faces.map((face) => parseFloat(getComputedStyle(face).animationDelay) * 1000));
+    expect(Math.round(delays[3] - delays[0])).toBe(1350);
+    await expect(host.getByRole("heading", { name: "Deal 1 results" })).toHaveCount(0);
+    await expect(host.getByRole("heading", { name: "Deal 1 results" })).toBeVisible({ timeout: 7000 });
+    await expect(finalTrick).toHaveCount(0);
     await expect(host.getByRole("region", { name: "Deal results" }).getByRole("row")).toHaveCount(5);
     await expect(host.getByRole("region", { name: "Current game totals" }).getByRole("row")).toHaveCount(5);
 
@@ -173,6 +180,17 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
       .then((path) => new URL(path, invite).href));
     await expect(ledger.getByRole("heading", { name: "Online Callbreak Ledger" })).toBeVisible();
     await expect(ledger.getByText("Deal 1 scores")).toBeVisible();
+
+    await host.getByRole("button", { name: "Deal next round" }).tap();
+    const sideLeader = await actingPlayer("Your turn to bid");
+    await table(sideLeader).getByRole("button", { name: "More bids" }).tap();
+    await table(sideLeader).getByRole("button", { name: "Bid 8", exact: true }).tap();
+    await expect(table(sideLeader).getByText("Your turn to bid")).toHaveCount(0);
+    for (let index = 0; index < 3; index++) await bid(1);
+    await expect(table(sideLeader).getByText("Your turn to play")).toBeVisible();
+    await expect(table(sideLeader).locator('[data-seat="south"] [aria-label="Dealer"]')).toBeVisible();
+    await expect(table(host).getByText(/Side game · .+ called 8/)).toBeVisible();
+
     await host.getByText("Table controls", { exact: true }).tap();
     host.once("dialog", (dialog) => dialog.accept());
     await host.getByRole("button", { name: "End table" }).tap();

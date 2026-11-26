@@ -3,7 +3,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { setTimeout as wait } from "node:timers/promises";
 import { test } from "node:test";
 import { dealHands, legalCards, nextSeat, seatPosition, winningPlay } from "../server/src/services/callbreakCards.js";
-import { applyCommand, createGame, getSummary } from "../server/src/services/gameService.js";
+import { applyCommand, createGame, getSummary, sideGamePayout } from "../server/src/services/gameService.js";
 import { calcPoints } from "../server/src/utils/gameLogic.js";
 import { localWorker } from "./local-worker.js";
 import { waitFor } from "./wait-for.js";
@@ -67,7 +67,7 @@ test("both ledgers require a first-place decision and split or award the payout 
   }
 });
 
-test("the online high-bid ledger uses the same opponent transfers as the in-person ledger", () => {
+test("legacy online high-bid records still replay with the original opponent transfers", () => {
   for (const won of [true, false]) {
     const settings = { name: "Friday", players: ["A", "B", "C", "D"], weights: [1, 2, 3], stake: 2 };
     const bids = { 1: 8, 2: 2, 3: 2, 4: 2 };
@@ -87,6 +87,40 @@ test("the online high-bid ledger uses the same opponent transfers as the in-pers
     assert.deepEqual(getSummary(online).gamePayouts, getSummary(manual).gamePayouts);
     assert.equal(getSummary(online).projectedPoints[1], 0);
   }
+});
+
+test("online side games settle both outcomes at the pooled rate without spending the regular deal", () => {
+  for (const [bid, payout] of [[8, 60], [9, 60], [10, 120], [13, 120]]) {
+    for (const won of [true, false]) {
+      const game = createGame("side", { name: "Friday", players: ["A", "B", "C", "D"],
+        weights: [10, 20, 30], mode: "online" }, 1000);
+      const regular = structuredClone(game.roundInfo);
+      const side = { round: 1, players: game.players, bids: { 1: 1, 2: 1, 3: bid, 4: 1 }, bidderId: "3" };
+      applyCommand(game, "start-online-side", side, 1001);
+      assert.deepEqual(game.roundInfo, regular);
+      assert.throws(() => applyCommand(game, "close-online-side", { round: 1 }, 1002), /Finish the side game/);
+      assert.throws(() => applyCommand(game, "score-online-side", { round: 1, won: 0, remaining: 13 }, 1002), /undecided/);
+      const result = { round: 1, won: won ? bid : 0, remaining: won ? 13 - bid : bid - 1 };
+      applyCommand(game, "score-online-side", result, 1003);
+      assert.throws(() => applyCommand(game, "score-online-side", result, 1003), /undecided/);
+      applyCommand(game, "close-online-side", { round: 1 }, 1004);
+      const sign = won ? 1 : -1;
+      const opponent = -sign * payout / 3;
+      const summary = getSummary(game);
+      assert.deepEqual(summary.gamePayouts, { 1: opponent, 2: opponent, 3: sign * payout, 4: opponent });
+      assert.deepEqual(summary.totalsPoints, { 1: 0, 2: 0, 3: 0, 4: 0 });
+      assert.equal(summary.highBids[0].dealerId, "3");
+      assert.deepEqual(game.roundInfo, regular);
+      assert.deepEqual(game.roundData, {});
+
+      applyCommand(game, "start-online-side", side, 1005);
+      applyCommand(game, "close-online-side", { round: 1, canceled: true }, 1006);
+      assert.equal(getSummary(game).highBids.length, 1);
+      assert.deepEqual(getSummary(game).gamePayouts, summary.gamePayouts);
+      assert.equal(game.onlineSide, undefined);
+    }
+  }
+  assert.deepEqual(sideGamePayout({ weights: [0.001, 0, 0], stake: 0.001 }, 10), { total: 0.000002, shares: [1, 1, 0] });
 });
 
 test("online scoring finishes five deals and settles only when the roster stayed intact", () => {
@@ -168,9 +202,13 @@ function harness(t, origin) {
     request(`${path}/command`, { player, key, body: { revision: player.view.revision, action, ...data } });
 
   async function apply(player, action, data = {}) {
+    if (action === "next" || action === "rematch") {
+      await wait(Math.max(0, (player.view.revealUntil ?? 0) - Date.now()) + 25);
+    }
     const previous = player.view.revision;
     const result = await command(player, action, data);
-    assert.equal(result.status, 200, JSON.stringify(result.data));
+    assert.equal(result.status, 200, JSON.stringify({ action, ...result.data,
+      online: player.view.seats?.map((seat) => seat && [seat.name, seat.online]) }));
     await waitFor(() => player.view.revision > previous);
     return player.view;
   }
@@ -224,7 +262,7 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   await worker.start();
   const game = harness(t, worker.origin);
   const [host, arun, bina, cory] = game.players;
-  await game.setup();
+  await game.setup({ bidSeconds: 0, playSeconds: 0, weights: [10, 20, 30] });
   assert.equal((await game.command(host, "start")).status, 409);
   for (const guest of [arun, bina, cory]) await game.join(guest);
   await waitFor(() => host.view.seats.every((seat) => seat?.online));
@@ -287,27 +325,35 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   const otherCard = seats.find((player) => player !== turn).view.hand[0];
   assert.equal((await game.command(turn, "play", { value: otherCard })).status, 400);
   assert.equal(await game.playDeal(seats), 48);
-  assert.equal(recoveredHost.view.taken.length, 13);
-  assert.equal(new Set(recoveredHost.view.taken.flatMap(({ plays }) => plays.map(({ card }) => card))).size, 52);
-  const [penultimate, finalTrick] = recoveredHost.view.taken.slice(-2);
+  assert.equal(Object.hasOwn(recoveredHost.view, "taken"), false);
+  const { penultimate, lastTrick: finalTrick, revealUntil } = recoveredHost.view;
+  assert.equal(penultimate.number, 12);
   assert.equal(finalTrick.number, 13);
   assert.equal(finalTrick.automatic, true);
   assert.equal(finalTrick.plays[0].seat, penultimate.winner);
   assert.deepEqual(finalTrick.plays.map(({ seat }) => seat), [0, 1, 2, 3].map((offset) => (penultimate.winner + offset) % 4));
   assert.equal(finalTrick.winner, winningPlay(finalTrick.plays).seat);
+  assert.equal(recoveredHost.view.lastWinnerId, finalTrick.winnerId);
+  assert.equal(revealUntil - finalTrick.completedAt, 4200);
+  assert.equal((await game.command(recoveredHost, "next")).data.error, "The final trick is still being shown.");
   assert.equal(recoveredHost.view.clock, null);
   await waitFor(() => seats.every((player) => player.view.phase === "between" && !player.view.hand.length));
 
   const first = (await game.request(`${game.ledger}/snapshot`)).data;
   const scores = first.game.roundData[1];
   for (const [id, tricks] of Object.entries(scores.actuals)) {
-    assert.equal(recoveredHost.view.taken.filter(({ winnerId }) => winnerId === id).length, tricks);
+    assert.equal(recoveredHost.view.seats.find((seat) => seat.id === id).wins, tricks);
   }
   assert.equal(scores.status, "PLAYED");
   assert.equal(Object.values(scores.actuals).reduce((a, b) => a + b), 13);
   assert.deepEqual(scores.points, Object.fromEntries(Object.keys(scores.bids).map((id) =>
     [id, calcPoints(scores.bids[id], scores.actuals[id])])));
   assert.equal(first.game.players[corySeat].name, "Cory");
+  await wait(Math.max(0, revealUntil - Date.now()) + 25);
+  await visitor.connect();
+  assert.equal(visitor.view.lastTrick, null);
+  assert.equal(Object.hasOwn(visitor.view, "penultimate"), false);
+  assert.equal(Object.hasOwn(visitor.view, "taken"), false);
 
   await worker.stop();
   await worker.start();
@@ -325,15 +371,40 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   seats[3] = replacement;
   await waitFor(() => recoveredHost.view.seats[corySeat]?.online);
   await game.apply(recoveredHost, "next");
-  await game.bidAll(seats, [10, 10, 1, 1]);
-  let scoredBeforeLastCard = false;
-  assert.equal(await game.playDeal(seats, (view, played) => {
-    if (played < 48 && view.scores.summary.highBids.length) {
-      scoredBeforeLastCard = true;
-      assert.ok(Object.values(view.scores.summary.gamePayouts).some(Boolean));
-    }
-  }), 48);
-  assert.equal(scoredBeforeLastCard, true);
+  const regularDealer = recoveredHost.view.dealer;
+  const firstBidder = recoveredHost.view.turn;
+  for (const [attempt, bids] of [[8, 8, 1, 1], [8, 10, 1, 1]].entries()) {
+    const bidder = (firstBidder + attempt) % 4;
+    const bidderId = recoveredHost.view.seats[bidder].id;
+    const payout = attempt === 0 ? 60 : 120;
+    await game.bidAll(seats, bids);
+    assert.equal(recoveredHost.view.dealer, bidder);
+    assert.equal(recoveredHost.view.turn, bidder);
+    assert.equal(recoveredHost.view.regularDealer, regularDealer);
+    assert.equal(recoveredHost.view.side.bid, bids[attempt]);
+    assert.equal(recoveredHost.view.scores.game.roundData[2], undefined);
+    const before = recoveredHost.view.scores.summary.gamePayouts;
+    assert.equal(await game.playDeal(seats, (view) => {
+      const outcome = view.scores.summary.highBids[attempt];
+      if (!outcome) return;
+      assert.equal(outcome.bidderId, bidderId);
+      assert.equal(outcome.total, payout);
+      const sign = outcome.outcome === "WIN" ? 1 : -1;
+      for (const { id } of view.seats) {
+        const difference = view.scores.summary.gamePayouts[id] - before[id];
+        assert.equal(difference, id === bidderId ? sign * payout : -sign * payout / 3);
+      }
+    }), 48);
+    assert.equal(recoveredHost.view.phase, "side-result");
+    assert.equal(recoveredHost.view.scores.summary.highBids.length, attempt + 1);
+    assert.equal(recoveredHost.view.scores.game.roundData[2], undefined);
+    await game.apply(recoveredHost, "next");
+    assert.equal(recoveredHost.view.round, 2);
+    assert.equal(recoveredHost.view.dealer, regularDealer);
+    assert.equal(recoveredHost.view.turn, firstBidder);
+  }
+  await game.bidAll(seats, [3, 2, 2, 2]);
+  assert.equal(await game.playDeal(seats), 48);
   const final = (await game.request(`${game.ledger}/snapshot`)).data;
   const second = final.game.roundData[2];
   const newId = final.game.players[corySeat].id;
@@ -342,6 +413,7 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   assert.equal(final.summary.totalsPoints[coryId], scores.points[coryId]);
   assert.equal(final.summary.totalsPoints[newId], second.points[newId]);
   assert.equal(Object.hasOwn(second.points, coryId), false);
+  assert.equal(final.game.roundInfo[2].dealerId, recoveredHost.view.seats[regularDealer].id);
   assert.equal(final.game.highBid, null);
 
   for (let round = 3; round <= 5; round++) {
@@ -366,7 +438,9 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   assert.equal((await game.request(`${game.path}/join`, { player: visitor, body: { name: visitor.name } })).status, 410);
   const archive = await game.request(`${game.path}/export`, { player: recoveredHost });
   assert.equal(archive.status, 200);
-  assert.equal(archive.data.events.filter(({ action }) => action === "record-online-highbid").length, 2);
+  for (const command of ["start-online-side", "score-online-side", "close-online-side"]) {
+    assert.equal(archive.data.events.filter(({ action }) => action === command).length, 2);
+  }
   assert.equal(archive.data.events.filter(({ action }) => action === "record-online-round").length, 5);
   const restoredId = hex(16);
   const restored = await game.request(`/api/ledger/${restoredId}/setup`, {
@@ -451,7 +525,8 @@ test("configured timers pause for an offline player and make legal automatic bid
   assert.equal(host.view.lastAuto, undefined);
 
   await guests[0].connect();
-  await waitFor(() => host.view.lastAuto?.action === "bid");
+  await waitFor(() => host.view.clock?.deadline != null);
+  await waitFor(() => host.view.lastAuto?.action === "bid", 8000);
   assert.ok(host.view.lastAuto.value >= 1 && host.view.lastAuto.value <= 4);
   assert.equal(host.view.expiresAt, expiry);
   const initialLedger = (await game.request(`${game.ledger}/snapshot`)).data.game;
@@ -462,7 +537,7 @@ test("configured timers pause for an offline player and make legal automatic bid
   await waitFor(() => actor.view.legal.length > 0);
   const legal = actor.view.legal;
   const playingExpiry = host.view.expiresAt;
-  await waitFor(() => host.view.lastAuto?.action === "play");
+  await waitFor(() => host.view.lastAuto?.action === "play", 8000);
   assert.equal(host.view.lastAuto.seat, actor.view.seat);
   assert.ok(legal.includes(host.view.lastAuto.value));
   assert.equal(host.view.expiresAt, playingExpiry);
