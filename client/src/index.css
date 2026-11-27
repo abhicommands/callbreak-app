@@ -93,3 +93,17 @@ td {
     padding-inline: 4px !important;
   }
 }
+
+.ledger-jumps { display: flex; gap: 16px; }
+.ledger-jumps a, .ledger-options summary { display: inline-flex; min-height: 44px; align-items: center; color: #203751; font-weight: 650; }
+.ledger-options summary { display: list-item; align-content: center; cursor: pointer; }
+.ledger-controls { margin-top: 12px; }
+.ledger-controls button { min-height: 44px; padding: 8px 12px; margin-right: 4px; border: 1px solid #52647b; border-radius: 8px; background: #263955; color: white; font: inherit; }
+.ledger-controls button[aria-pressed=false] { background: white; color: #263955; }
+.ledger-options { min-width: 0; margin-top: 8px; border-top: 1px solid #dae1ec; }
+.ledger-options fieldset { margin: 12px 0; min-width: 0; padding: 8px; }
+.ledger-options label { display: grid; gap: 4px; margin-block: 6px; }
+.ledger-options label:has(input[type=radio]) { display: inline-flex; align-items: center; min-height: 44px; margin-right: 12px; }
+.ledger-options input:not([type=radio]), .ledger-options select { width: 100%; min-width: 0; min-height: 44px; font: inherit; }
+.transfers { padding: 0; list-style: none; }
+.transfers li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid #dae1ec; }

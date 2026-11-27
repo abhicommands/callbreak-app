@@ -51,7 +51,7 @@ Payout presets are 1/2/3, 5/10/15, and 10/20/30. The host can enter custom amoun
 
 Explicitly leaving mid-deal pauses the table until the player returns or the host restores the seat. Switching apps, locking a phone, and losing a connection preserve the reserved seat and the timer. A silent connection loss can take up to about a minute to register. Save the private seat code and host recovery code from **Reconnect from another browser**. A successful host recovery replaces the previous host seat code. Joining by name alone grants no access to an existing seat's cards.
 
-Open **Group** and copy the group link to reuse it for both modes. Open the next game from the group to select its four members, rules, and stakes. **Settle up** previews transfers and **Confirm paid** records the payment. Archived game results retain their original rules and amounts. The group history includes game outcomes and dated payments.
+Reuse the regular table invite or ledger link for future games. In the ledger, **Balances** shows running amounts, **Settle up** previews transfers, and **Confirm paid** saves a payment receipt. After the game ends, **Start a new game** lets the host choose the mode, players, rules, and stakes. Previous receipts remain in game history.
 
 ## In-person ledger
 

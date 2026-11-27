@@ -1,6 +1,5 @@
 import React from "react";
 import { Routes, Route, Navigate, useParams } from "react-router-dom";
-import GroupPage from "./pages/GroupPage.jsx";
 import Home from "./pages/Home.jsx";
 import Landing from "./pages/Landing.jsx";
 import GamePage from "./pages/game/GamePage.jsx";
@@ -20,7 +19,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<Landing />} />
-      <Route path="/group/:id" element={<GroupRoute />} />
+      <Route path="/group/:id" element={<LegacyGroupLink />} />
       <Route path="/ledger" element={<Home />} />
       <Route path="/play" element={<OnlineHome />} />
       <Route path="/play/:tableId" element={<TableRoute />} />
@@ -30,7 +29,7 @@ export default function App() {
   );
 }
 
-function GroupRoute() {
+function LegacyGroupLink() {
   const { id } = useParams();
-  return <GroupPage key={id} id={id} />;
+  return <Navigate replace to={`/ledger/${id}`} />;
 }

@@ -511,7 +511,7 @@ export class OnlineTable {
       const abandoned = midDeal(room) && Boolean(room.deal?.ledgerBids || room.deal?.side);
       if (abandoned) this.ledger.write(id, room.deal?.side ? "close-online-side" : "abandon-online-round",
         room.deal?.side ? { round: room.round, canceled: true } : { round: room.round }, at);
-      return { room: { name, host, recovery, revision, hasLedger, phase: "ended" } satisfies Room, ledgerChanged: abandoned };
+      return { room: { name, host, recovery, revision, hasLedger, phase: "ended" } satisfies Room, ledgerChanged: hasLedger };
     }
     if (action === "settle") {
       assert(room.phase === "finished", 409, "Finish all five deals first.");
@@ -519,7 +519,7 @@ export class OnlineTable {
       return { room, ledgerChanged: true };
     }
     if (action === "settings") {
-      assert(room.phase === "lobby" && !room.prepared, 409, "The group already selected rules for this game.");
+      assert(room.phase === "lobby" && !room.prepared, 409, "The rules for this game have already been selected.");
       room.settings = rulesFor(value);
       return { room };
     }

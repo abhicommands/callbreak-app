@@ -1,4 +1,6 @@
 import React, { useMemo } from "react";
+import GameTotals from "./GameTotals.jsx";
+import { PaymentReceipts } from "./LedgerControls.jsx";
 import { Card, inputStyle, tableStyle, thStyle, tdStyle, pillStyle } from "./ui.js";
 
 export default function GameHistory({
@@ -52,10 +54,10 @@ export default function GameHistory({
                 <option
                   key={game.gameId}
                   value={game.gameId}
-                  disabled={!game.settlementApplied}
+                  disabled={game.gameId === series.currentGameId && !["Posted", "Ended", "Payout skipped"].includes(game.status)}
                 >
                   {`Game ${game.gameIndex} • ${formatTs(game.createdAt)}`}
-                  {!game.settlementApplied ? " (in progress)" : ""}
+                  {game.status ? " · " + game.status : ""}
                 </option>
               ))}
           </select>
@@ -90,7 +92,7 @@ export default function GameHistory({
               flexWrap: "wrap",
             }}
           >
-            <span>Resolved at {formatTs(history.resolvedAt)}</span>
+            {history.resolvedAt && <span>Resolved at {formatTs(history.resolvedAt)}</span>}
             <span style={pillStyle}>{history.name}</span>
           </div>
 
@@ -119,11 +121,6 @@ export default function GameHistory({
                     {snapshot.status} · Dealer {names[snapshot.dealerId]}
                   </span>
                 </h4>
-                {(history.roundEvents?.[round] || []).filter((event) => event.type === "HIGH_BID_RESOLVED").map((event, index) => (
-                  <p key={index}>
-                    {names[event.bidderId] || history.benchNames?.[event.bidderId]} {event.outcome === "WIN" ? "won" : "lost"} {event.total == null ? `at ${event.stake} per opponent` : `${event.total} on a call of ${event.bid}`}.
-                  </p>
-                ))}
                 <table style={tableStyle}>
                   <thead>
                     <tr>
@@ -177,6 +174,11 @@ export default function GameHistory({
           )}
         </>
       )}
+      {history?.ledger && !loading && <>
+        <p>{history.ledger.game.mode === "online" ? "Online" : "In person"} · {history.ledger.game.settlementConfig.weights.join(" / ")} × {history.ledger.game.settlementConfig.stake}</p>
+        <GameTotals summary={history.ledger.summary} />
+        <PaymentReceipts game={history.ledger.game} />
+      </>}
     </Card>
   );
 }

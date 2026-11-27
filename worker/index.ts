@@ -32,9 +32,9 @@ const IDLE_SECONDS = 7 * 24 * 60 * 60;
 const EXPIRY_KEY = "expiresAt";
 const EXPIRED_MESSAGE = "This ledger expired. Restore a backup from the home page to continue.";
 
-function snapshot(game: Game, revision: number, expiresAt: number | null, onlineTable = false) {
+function snapshot(game: Game, revision: number, expiresAt: number | null, phase?: string) {
   return { version: VERSION, revision, expiresAt, game: publicGame(game), summary: getSummary(game),
-    ...(onlineTable ? { onlineTable } : {}) };
+    ...(phase && { onlineTable: true }), ...(phase === "ended" && { tableEnded: true }) };
 }
 
 function parseGame(data: string): Game {
@@ -55,12 +55,12 @@ export class Ledger extends DurableObject<Env> {
     write: (seriesId, action, payload, at) => this.writeOnlineLedger(seriesId, action, payload, at),
     publish: () => {
       const row = this.requireLedger();
-      this.broadcast(snapshot(parseGame(row.game), row.revision, this.expiresAt(), true));
+      this.broadcast(snapshot(parseGame(row.game), row.revision, this.expiresAt(), this.table.room?.phase));
     },
     backup: () => this.backup(),
     snapshot: () => {
       const row = this.findLedger();
-      return row ? snapshot(parseGame(row.game), row.revision, this.expiresAt(), true) : null;
+      return row ? snapshot(parseGame(row.game), row.revision, this.expiresAt(), this.table.room?.phase) : null;
     },
     pendingTie: () => {
       const row = this.findLedger();
@@ -164,7 +164,7 @@ export class Ledger extends DurableObject<Env> {
     if (kept) {
       this.table.notify();
       const row = this.findLedger();
-      if (row) this.broadcast(snapshot(parseGame(row.game), row.revision, this.expiresAt(), Boolean(this.table.room)));
+      if (row) this.broadcast(snapshot(parseGame(row.game), row.revision, this.expiresAt(), this.table.room?.phase));
       return;
     }
     const sockets = this.ctx.getWebSockets();
@@ -186,7 +186,7 @@ export class Ledger extends DurableObject<Env> {
     const closing = ["mark-paid", "finish-group-game", "close-group-game"].includes(event.action);
     const reserve = closing || restoring ? 0 : 3;
     assert(event.revision <= MAX_EVENTS - reserve && (restoring || bytes <= BACKUP_BYTES - 512 - reserve * 128),
-      409, "This group has reached its history limit. Export its ledger before starting a new group.");
+      409, "This ledger has reached its history limit. Export it before starting a new ledger.");
     this.ctx.storage.kv.put("exportBytes", bytes);
     this.sql.exec("INSERT INTO audit VALUES (?, ?, ?, ?)", event.revision, event.action,
       JSON.stringify(event.payload), event.at);
@@ -215,7 +215,7 @@ export class Ledger extends DurableObject<Env> {
     const row = this.requireLedger();
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.send(JSON.stringify(snapshot(parseGame(row.game), row.revision, this.expiresAt(), Boolean(this.table.room))));
+    server.send(JSON.stringify(snapshot(parseGame(row.game), row.revision, this.expiresAt(), this.table.room?.phase)));
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -348,7 +348,7 @@ export class Ledger extends DurableObject<Env> {
         if (receipt) {
           assert(matches(fingerprint, receipt.fingerprint), 409, "Idempotency key already used for a different request.");
           return {
-            view: snapshot(parseGame(row.game), row.revision, currentExpiry),
+            view: snapshot(parseGame(row.game), row.revision, currentExpiry, room?.phase),
             committedRevision: receipt.revision,
             replayed: true,
           };
@@ -428,7 +428,7 @@ export class Ledger extends DurableObject<Env> {
       }
       this.sql.exec("INSERT INTO receipt VALUES (?, ?, ?)", key, revision, fingerprint);
       const expiresAt = await this.refreshExpiry(txn, at, currentExpiry);
-      return { view: snapshot(game, revision, expiresAt, Boolean(this.table.room)), committedRevision: revision, replayed: false };
+      return { view: snapshot(game, revision, expiresAt, this.table.room?.phase), committedRevision: revision, replayed: false };
     });
 
     if (!result.replayed) {
@@ -487,7 +487,7 @@ export class Ledger extends DurableObject<Env> {
         if (route === "editor" || route === "export") return await this.editorRead(request, route);
         if (route === "snapshot") {
           const row = this.requireLedger();
-          return json(snapshot(parseGame(row.game), row.revision, this.expiresAt(), Boolean(this.table.room)));
+          return json(snapshot(parseGame(row.game), row.revision, this.expiresAt(), this.table.room?.phase));
         }
       }
       if (request.method === "POST" && ["setup", "command", "recover"].includes(route)) {

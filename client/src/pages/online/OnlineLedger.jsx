@@ -3,17 +3,19 @@ import { Link } from "react-router-dom";
 import { ledgerPath, request } from "../../api.js";
 import SettlementCard from "../game/components/SettlementCard.jsx";
 import GameTotals from "../game/components/GameTotals.jsx";
+import { PaymentReceipts } from "../game/components/LedgerControls.jsx";
 import { formatBalance } from "../game/components/ui.js";
 import "./online.css";
 
-function OnlineScores({ game, summary, heading }) {
-  const rounds = Object.entries(game.roundData).filter(([, round]) => round.status === "PLAYED");
+function OnlineScores({ game, summary, heading, controls }) {
+  const rounds = Object.entries(game.roundData).filter(([, round]) => ["PLAYED", "AUTO_AWARDED"].includes(round.status));
   const roster = [...summary.players, ...summary.inactivePlayers];
   const names = new Map(roster.map(({ id, name }) => [id, name]));
   return (
     <section className="online-panel" aria-label="Online ledger">
       <h2>{heading ?? game.name}</h2>
       {game.settlementSkipped && <p>Final scores are saved. Automatic payouts are skipped for games with substitutions.</p>}
+      <p>{game.mode === "online" ? "Online" : "In person"} · {game.settlementConfig.weights.join(" / ")} × {game.settlementConfig.stake}</p>
       <GameTotals summary={summary} />
       {!rounds.length ? <p>Scores appear after the first completed deal.</p> : (
         <>
@@ -26,7 +28,7 @@ function OnlineScores({ game, summary, heading }) {
                 <tbody>
                   {game.roundInfo[round].bidderOrder.map((id) => (
                     <tr key={id}><th scope="row">{names.get(id)}</th><td>{result.bids[id]}</td>
-                      <td>{result.actuals[id]}</td><td>{result.points[id].toFixed(1)}</td></tr>
+                      <td>{result.actuals[id] ?? "–"}</td><td>{result.points[id].toFixed(1)}</td></tr>
                   ))}
                 </tbody>
               </table>
@@ -35,12 +37,13 @@ function OnlineScores({ game, summary, heading }) {
           <SettlementCard summary={summary} />
         </>
       )}
-      <h3>Series balances</h3>
+      <h3 id={controls ? "balances" : undefined}>Series balances</h3>
       <table className="online-scores">
         <thead><tr><th scope="col">Player</th><th scope="col">Balance</th></tr></thead>
         <tbody>{[...roster].sort((a, b) => summary.payouts[b.id] - summary.payouts[a.id])
           .map(({ id, name }) => <tr key={id}><th scope="row">{name}</th><td>{formatBalance(summary.payouts[id])}</td></tr>)}</tbody>
       </table>
+      {controls ?? <PaymentReceipts game={game} />}
     </section>
   );
 }
@@ -95,16 +98,16 @@ function OnlineHistory({ game }) {
   );
 }
 
-export function OnlineLedger({ game, summary, connected, onlineTable, children }) {
+export function OnlineLedger({ game, summary, connected, onlineTable, controls, children }) {
   return (
     <main className="online-page">
-      <header className="online-header"><Link to={`/group/${game.seriesId}`}>Group balances &amp; games</Link>
+      <header className="online-header"><a href="#balances">Balances</a>
         {onlineTable && <Link to={`/play/${game.seriesId}`}>Online table</Link>}
       </header>
       <h1>Online Callbreak Ledger</h1>
       <p role="status">Live sync: {connected ? "Online" : "Reconnecting"}</p>
-      <p>Paid-up groups expire after seven inactive days. Outstanding balances are retained.</p>
-      <OnlineScores game={game} summary={summary} heading={`Game ${game.gameIndex} · ${game.name}`} />
+      <p>Paid-up ledgers expire after seven inactive days. Outstanding balances are retained.</p>
+      <OnlineScores game={game} summary={summary} controls={controls} heading={`Game ${game.gameIndex} · ${game.name}`} />
       <OnlineHistory game={game} />
       {children}
     </main>

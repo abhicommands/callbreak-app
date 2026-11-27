@@ -1,7 +1,7 @@
 import React from "react";
 import { Card, formatBalance, tableStyle, thStyle, tdStyle } from "./ui.js";
 
-export default function PayoutLeaderboard({ summary }) {
+export default function PayoutLeaderboard({ summary, children }) {
   const payouts = summary?.payouts || {};
   const active = summary?.players || [];
   const bench = summary?.inactivePlayers || [];
@@ -45,6 +45,7 @@ export default function PayoutLeaderboard({ summary }) {
       <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>
         Ledger updates after side games and final settlement.
       </div>
+      {children}
     </Card>
   );
 }
