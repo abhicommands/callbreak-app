@@ -42,7 +42,7 @@ function parseGame(data: string): Game {
 }
 
 export class Ledger extends DurableObject<Env> {
-  private table = new OnlineTable(this.ctx, {
+  private table: OnlineTable = new OnlineTable(this.ctx, {
     exists: () => Boolean(this.findLedger()),
     expiresAt: () => this.expiresAt(),
     refresh: (txn, at) => this.refreshExpiry(txn, at, this.expiresAt()),

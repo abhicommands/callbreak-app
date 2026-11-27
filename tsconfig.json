@@ -6,6 +6,7 @@
     "moduleResolution": "Bundler",
     "types": ["@cloudflare/workers-types"],
     "allowJs": true,
+    "noEmit": true,
     "strict": true,
     "skipLibCheck": true
   },
