@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ledgerPath, randomHex, request } from "../../api.js";
 import useExpandedTable from "./useExpandedTable.js";
 import MatchTable from "./MatchTable.jsx";
+import SeatOrder from "../../SeatOrder.jsx";
 import CopyLinkButton from "../../CopyLinkButton.jsx";
 import TieSettlement from "../game/components/TieSettlement.jsx";
 import { RulesSummary, SettingsFields } from "./TableSettings.jsx";
@@ -104,9 +105,16 @@ function SeatRequest({ entry, view, ready, command }) {
             Restore seat
           </button>
         )}
-        {!duringDeal && (
+        {(!duringDeal || valid) && (
           <button disabled={!ready || !valid}
-            onClick={() => command("approve", { requestId: entry.id, target: Number(target), replace: true })}>
+            onClick={() => {
+              const player = view.seats[Number(target)];
+              if (!duringDeal || window.confirm(player.bidderName || player.bid != null
+                ? `This deal counts for ${player.bidderName ?? player.name}. ${entry.name} takes the remaining cards.`
+                : `${entry.name} will bid and score this deal. Continue?`)) {
+                command("approve", { requestId: entry.id, target: Number(target), replace: true });
+              }
+            }}>
             Assign as new player
           </button>
         )}
@@ -233,7 +241,7 @@ function Room({ tableId }) {
     <details className="online-panel">
       <summary>Reconnect from another browser</summary>
       {seated && <label>Private seat code<input value={token} readOnly onFocus={(event) => event.target.select()} /></label>}
-      {view.host && recovery && <label>Host recovery code<input value={recovery} readOnly
+      {view.owner && recovery && <label>Host recovery code<input value={recovery} readOnly
         onFocus={(event) => event.target.select()} /></label>}
       {seated && <p>Save your codes privately. Reopening this link in the same browser reconnects you automatically.</p>}
       {!seated && <>
@@ -264,6 +272,18 @@ function Room({ tableId }) {
         <TieSettlement players={(closedScores ?? view.scores).summary.pendingTie} ready={!busy}
           onSettle={(value) => command("settle", { value })} />
       )}
+      {view?.canTakeHost && <button disabled={!ready} onClick={() => command("take-host")}>Take over hosting</button>}
+      {view?.sleeping && view.host && <button disabled={!ready} onClick={() => command("resume")}>Resume table</button>}
+      {view?.canStartFresh && <form className="online-panel" onSubmit={event => {
+        event.preventDefault();
+        const name = seated ? view.seats[view.seat].name : new FormData(event.currentTarget).get("name");
+        if (view.phase === "ended" || view.phase === "finished" || window.confirm("Start fresh? Recorded payouts stay on the ledger. The unfinished game ends without a final payout.")) {
+          command("fresh", { value: name });
+        }
+      }}>
+        {!seated && <label>Your name for the new game<input name="name" defaultValue={view.savedName ?? ""} required maxLength={80} /></label>}
+        <button disabled={!ready}>Host a new game on this link</button>
+      </form>}
       {view?.seats && (
         <>
           {!inGame && <section className="online-panel online-roster" aria-label="Players">
@@ -303,11 +323,11 @@ function Room({ tableId }) {
               </details>}
             </section>
           )}
-          {!seated && (
+          {!seated && !view.canStartFresh && (
             <section className="online-panel">
               {view.pending ? <p>Waiting for the host to approve your seat request.</p> : (
                 <form className="online-actions" onSubmit={join}>
-                  <label>Your name<input name="name" required maxLength={80} autoComplete="nickname" /></label>
+                  <label>Your name<input name="name" defaultValue={view.savedName ?? ""} required maxLength={80} autoComplete="nickname" /></label>
                   <button disabled={!ready}>{view.phase === "lobby" && view.seats.includes(null) ? "Join table" : "Request a seat"}</button>
                 </form>
               )}
@@ -329,6 +349,11 @@ function Room({ tableId }) {
       {(seated || view?.host) ? (
         <details className="online-panel table-controls" open={view.phase === "ended" || undefined}>
           <summary>Table controls</summary>
+          {view.host && between && view.seats.every(p => p?.reserved) && <details>
+            <summary>Arrange seats</summary>
+            <SeatOrder players={view.nextOrder ? view.nextOrder.map(id => view.seats.find(p => p.id === id)) : view.seats}
+              disabled={!ready} onChange={players => command("order", { value: players.map(p => p.id) })} />
+          </details>}
           {inGame && <RulesSummary settings={view.settings} />}
           <div className="online-actions">
             {view.host && between && view.seats.map((player, seat) => player && !player.host && (
@@ -336,11 +361,11 @@ function Room({ tableId }) {
                 if (window.confirm(`Remove ${player.name} from this seat?`)) command("remove", { target: seat });
               }}>Remove {player.name}</button>
             ))}
-            {view.host && view.hasLedger && <button className="online-secondary" onClick={backup} disabled={busy}>Export ledger</button>}
+            {view.owner && view.hasLedger && <button className="online-secondary" onClick={backup} disabled={busy}>Export ledger</button>}
             {view.host && view.phase !== "ended" && <button className="online-danger" disabled={!ready} onClick={() => {
               if (window.confirm("End this table? Completed deals will stay in the ledger.")) command("end");
             }}>End table</button>}
-            {seated && !view.seats[view.seat]?.left && (!between || !view.host) && <button className="online-secondary" disabled={!ready}
+            {seated && !view.seats[view.seat]?.left && <button className="online-secondary" disabled={!ready}
               onClick={() => { if (window.confirm("Give up this seat?")) command("leave"); }}>{between ? "Give up seat" : "Leave game"}</button>}
           </div>
           {recoveryPanel}

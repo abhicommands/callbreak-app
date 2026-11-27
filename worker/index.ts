@@ -44,6 +44,13 @@ function parseGame(data: string): Game {
 export class Ledger extends DurableObject<Env> {
   private table: OnlineTable = new OnlineTable(this.ctx, {
     exists: () => Boolean(this.findLedger()),
+    roster: () => {
+      const row = this.findLedger();
+      if (!row) return { gameIndex: 0, players: [], closed: false };
+      const game = parseGame(row.game);
+      return { gameIndex: game.gameIndex, players: [...game.players, ...game.inactivePlayers],
+        closed: Boolean(game.settlementApplied || ("closedAt" in game && game.closedAt) || ("settlementSkipped" in game && game.settlementSkipped)) };
+    },
     expiresAt: () => this.expiresAt(),
     refresh: (txn, at) => this.refreshExpiry(txn, at, this.expiresAt()),
     schedule: async (txn, deadline) => {
@@ -285,7 +292,7 @@ export class Ledger extends DurableObject<Env> {
       this.sql.exec("INSERT INTO ledger VALUES (1, ?, '', '', ?)", revision, JSON.stringify(game));
     } else {
       if (!row) throw new HttpError(404, "Ledger not found.");
-      assert(revision + (action === "next-online-game" ? 32 : 0) <= MAX_EVENTS, 409, "This ledger has reached its history limit.");
+      assert(revision + (["next-online-game", "group-next"].includes(action) ? 32 : 0) <= MAX_EVENTS, 409, "This ledger has reached its history limit.");
       const active = parseGame(row.game);
       const game = applyCommand(active, action, fields, at);
       if (active !== game) this.archive(active);

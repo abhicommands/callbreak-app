@@ -38,6 +38,18 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     const dealer = editor.getByRole("combobox").filter({
       has: editor.locator("option").filter({ hasText: /^Player 1$/ }),
     });
+    const order = editor.getByRole("list", { name: "Seating order" });
+    await order.getByRole("button", { name: "Move Player 1 down" }).tap();
+    await expect(order.getByRole("listitem").nth(1)).toContainText("Player 1");
+    const handle = order.getByRole("button", { name: "Drag Player 1 to reorder" });
+    await handle.scrollIntoViewIfNeeded();
+    const start = await handle.boundingBox();
+    const end = await order.getByRole("listitem").first().boundingBox();
+    await editor.mouse.move(start.x + start.width / 2, start.y + start.height / 2);
+    await editor.mouse.down();
+    await editor.mouse.move(end.x + end.width / 2, end.y + end.height / 2, { steps: 4 });
+    await editor.mouse.up();
+    await expect(order.getByRole("listitem").first()).toContainText("Player 1");
     await expect(dealer).toHaveValue("1");
     await dealer.selectOption("2");
     await editor.getByRole("button", { name: "Reset", exact: true }).click();

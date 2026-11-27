@@ -137,7 +137,7 @@ function onlineRoster(game, players) {
   return { players: roster, inactivePlayers: [...known.values()].filter(({ id }) => !ids.has(id)), balanceUnits };
 }
 
-function prepareOnlineRound(game, round, players, bids) {
+function prepareOnlineRound(game, round, players, bids, dealerId) {
   const completed = Object.values(game.roundData).filter(({ status }) => status === "PLAYED").length;
   assert(game.mode === "online" && round === completed + 1,
     409, "Save online rounds in order.");
@@ -145,11 +145,15 @@ function prepareOnlineRound(game, round, players, bids) {
   const roster = onlineRoster(game, players);
   const dealerSeat = game.players.findIndex(({ id }) => id === game.roundInfo[round].dealerId);
   assert(dealerSeat !== -1, 409, "No dealer for this round.");
-  if (round > 1 && game.players.some(({ id }, index) => id !== roster.players[index].id)) {
+  const changed = game.players.some(({ id }, index) => dealerId === undefined
+    ? id !== roster.players[index].id : !roster.players.some(player => player.id === id));
+  if (round > 1 && changed) {
     game.rosterChanged = true;
   }
   Object.assign(game, roster);
-  initDealerRotation(game, roster.players[dealerSeat].id, round);
+  const dealer = dealerId ?? roster.players[dealerSeat].id;
+  assert(roster.players.some(player => player.id === dealer), 400, "Choose a seated dealer.");
+  initDealerRotation(game, dealer, round);
 
   roundValues(game, bids, 1, "bids");
   const minimum = game.minimumBid ?? DEFAULT_MINIMUM_BID;
@@ -157,9 +161,9 @@ function prepareOnlineRound(game, round, players, bids) {
     400, `Bids must total at least ${minimum}.`);
 }
 
-function recordOnlineBids(game, { round, players, bids }, at) {
+function recordOnlineBids(game, { round, players, bids, dealerId }, at) {
   assert(!game.roundData[round], 409, "Bids are already locked.");
-  prepareOnlineRound(game, round, players, bids);
+  prepareOnlineRound(game, round, players, bids, dealerId);
   saveRegularBids(game, round, bids, at);
 }
 
@@ -176,9 +180,9 @@ function recordOnlineHighBid(game, { round, bidderId, won, remaining }, at) {
   applyHighBidOutcome(game, { round, bidderId, bidderWon: result }, at);
 }
 
-function startOnlineSide(game, { round, players, bids, bidderId }, at) {
+function startOnlineSide(game, { round, players, bids, bidderId, dealerId }, at) {
   assert(!game.onlineSide && !game.roundData[round], 409, "Finish the active deal first.");
-  prepareOnlineRound(game, round, players, bids);
+  prepareOnlineRound(game, round, players, bids, dealerId);
   const order = game.roundInfo[round].bidderOrder;
   const firstHighest = highestBidder(order, (id) => bids[id]);
   assert(firstHighest && firstHighest === bidderId, 400, "Choose the first highest bidder for the side game.");
@@ -204,9 +208,9 @@ function closeOnlineSide(game, { round, canceled }, at) {
   delete game.onlineSide;
 }
 
-function recordOnlineRound(game, { round, players, bids, actuals }, at) {
+function recordOnlineRound(game, { round, players, bids, actuals, dealerId }, at) {
   const locked = game.roundData[round];
-  prepareOnlineRound(game, round, players, bids);
+  prepareOnlineRound(game, round, players, bids, dealerId);
   if (locked) {
     assert(locked.status === "BIDS_SET" && game.players.every(({ id }) => locked.bids[id] === bids[id]),
       409, "These bids do not match the locked deal.");

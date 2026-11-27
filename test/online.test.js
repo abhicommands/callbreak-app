@@ -176,10 +176,15 @@ function harness(t, origin) {
         const body = JSON.parse(event.data);
         if ("ack" in body) player.replies.set(body.ack, body);
         else if ("sync" in body) player.synced = body;
-        else player.view = body;
+        else if ("presence" in body) {
+          if (player.view?.revision === body.revision) player.view.canTakeHost = body.canTakeHost;
+        } else player.view = body;
       });
       const ping = setInterval(() => {
-        if (socket.readyState === WebSocket.OPEN) socket.send("ping");
+        if (socket.readyState === WebSocket.OPEN) {
+          socket.send("ping");
+          socket.send("presence-v2");
+        }
       }, 4000);
       socket.addEventListener("close", () => clearInterval(ping), { once: true });
       await waitFor(() => player.view);
@@ -300,7 +305,7 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   assert.deepEqual(newBrowser.view.hand, []);
   await waitFor(() => host.view.requests.length === 1);
   const { id: requestId } = host.view.requests[0];
-  assert.equal((await game.command(host, "approve", { requestId, target: corySeat, replace: true })).status, 409);
+  assert.equal((await game.command(host, "approve", { requestId, target: arun.view.seat, replace: true })).status, 409);
   await game.apply(host, "approve", { requestId, target: corySeat });
   await waitFor(() => newBrowser.view.seat === corySeat);
   assert.deepEqual(newBrowser.view.hand, original[3]);
@@ -517,12 +522,22 @@ test("reserved offline seats can start, time out, reconnect and explicitly pause
   await game.apply(host, "start");
   assert.equal(host.view.clock.limitMs, 3000);
   await guests[0].connect();
-  await game.apply(guests[0], "leave");
+  const offTurn = guests.find(p => p.view.seat !== host.view.turn);
+  await game.apply(offTurn, "leave");
+  assert.ok(host.view.clock.deadline);
+  await game.apply(offTurn, "return");
+  assert.equal((await game.command(offTurn, "pause")).status, 403);
+  await game.apply(host, "pause");
   await waitFor(() => host.view.clock?.deadline === null);
   const paused = host.view.revision;
   await wait(3300);
   assert.equal(host.view.revision, paused);
-  await game.apply(guests[0], "return");
+  const waiting = game.players.find(p => p.view.seat === host.view.turn);
+  assert.equal((await game.command(waiting, "bid", { value: 3 })).status, 409);
+  await game.apply(host, "resume");
+  await game.apply(waiting, "leave");
+  assert.equal(waiting.view.clock.deadline, null);
+  await game.apply(waiting, "return");
   await waitFor(() => host.view.clock?.deadline != null);
   const expiry = host.view.expiresAt;
   const bidder = game.players.find((p) => p.view.seat === host.view.turn);
@@ -546,10 +561,11 @@ test("reserved offline seats can start, time out, reconnect and explicitly pause
   actor.socket.close();
   await waitFor(() => watcher.view.lastAuto?.action === "play", 8000);
   assert.equal(watcher.view.lastAuto.seat, actor.view.seat);
-  assert.ok(legal.includes(watcher.view.lastAuto.value));
+  assert.equal(watcher.view.lastAuto.value, undefined);
   assert.equal(watcher.view.expiresAt, playingExpiry);
   await actor.connect();
   await waitFor(() => actor.view.hand.length === 12);
+  assert.ok(legal.includes(actor.view.autoNotice.value));
 });
 
 test("a recurring group switches modes, keeps member IDs, confirms payments once, and restores its history", async (t) => {
@@ -607,4 +623,153 @@ test("a recurring group switches modes, keeps member IDs, confirms payments once
   assert.equal(restored.status, 201);
   const history = await game.request(other + "/history/2");
   assert.deepEqual(history.data.ledger.game.payments, paid.game.payments);
+});
+
+test("a sleeping table keeps its hand, elects the first returner, and seats four friends on the same ledger", { timeout: 110_000 }, async t => {
+  const worker = await localWorker();
+  t.after(() => worker.dispose());
+  await worker.start();
+  const game = harness(t, worker.origin);
+  const [owner, b, c, d] = game.players;
+  await game.setup({ bidSeconds: 3, playSeconds: 3 });
+  for (const guest of [b, c, d]) await game.join(guest);
+  await game.apply(owner, "order", { value: owner.view.seats.map(p => p.id).reverse() });
+  await game.apply(owner, "start");
+  assert.deepEqual(owner.view.seats.map(p => p.name), [d, c, b, owner].map(p => p.name));
+  const ids = Object.fromEntries(owner.view.seats.map(p => [p.name, p.id]));
+  const hand = b.view.hand;
+  const turn = owner.view.turn;
+  const visitor = game.actor("E");
+  await visitor.connect();
+  for (const p of game.players) p.socket.close();
+  await waitFor(() => visitor.view.seats.every(p => !p.online));
+  assert.equal(visitor.view.clock.deadline, null);
+  await waitFor(() => visitor.view.sleeping, 72_000);
+  assert.equal(visitor.view.turn, turn);
+  assert.ok(visitor.view.seats.every(p => p.bid === null));
+  assert.equal(visitor.view.canStartFresh, true);
+  await b.connect();
+  await waitFor(() => b.view.host);
+  assert.deepEqual(b.view.hand, hand);
+  assert.equal(b.view.clock.deadline, null);
+  assert.equal((await game.command(visitor, "fresh", { value: "E" })).status, 409);
+  assert.equal((await game.request(game.ledger + "/editor", { player: b })).status, 403);
+  assert.equal((await game.request(game.path + "/export", { player: b })).status, 403);
+  assert.equal((await game.request(game.ledger + "/editor", { player: owner })).status, 200);
+  await game.apply(b, "fresh", { value: b.name });
+  for (const p of [c, d, visitor]) {
+    if (p === visitor) p.socket.close();
+    await game.join(p);
+  }
+  await game.apply(b, "start");
+  assert.equal(b.view.gameIndex, 2);
+  for (const p of b.view.seats.filter(p => p.name !== visitor.name)) assert.equal(p.id, ids[p.name]);
+  assert.ok(b.view.scores.game.inactivePlayers.some(p => p.id === ids.Host));
+  assert.equal((await game.request(game.ledger + "/history/1")).status, 200);
+  await owner.connect();
+  assert.equal(owner.view.host, false);
+  assert.deepEqual(owner.view.hand, []);
+});
+
+test("a seated guest can take over a paused game after the host disconnects", { timeout: 110_000 }, async t => {
+  const worker = await localWorker();
+  t.after(() => worker.dispose());
+  await worker.start();
+  const game = harness(t, worker.origin);
+  const [host, b, c, d] = game.players;
+  await game.setup();
+  for (const p of [b, c, d]) await game.join(p);
+  await game.apply(host, "start");
+  await game.apply(host, "pause");
+  host.socket.close();
+  await waitFor(() => b.view.seats.some(p => p.host && !p.online));
+  assert.equal((await game.command(b, "take-host")).status, 409);
+  await waitFor(() => b.view.canTakeHost && c.view.canTakeHost, 72_000);
+  const results = await Promise.all([b, c].map(p => game.command(p, "take-host")));
+  assert.deepEqual(results.map(r => r.status).sort(), [200, 409], JSON.stringify(results));
+  const winner = results[0].status === 200 ? b : c;
+  await waitFor(() => winner.view.host);
+  await host.connect();
+  assert.equal(host.view.host, false);
+  assert.equal(host.view.pausedBy, "Host");
+  await game.apply(winner, "resume");
+  assert.equal((await game.command(host, "pause")).status, 403);
+  assert.equal((await game.request(game.ledger + "/editor", { player: winner })).status, 403);
+});
+
+test("a substitute plays the remaining hand for its bidder and scores their own subsequent deal", async t => {
+  const worker = await localWorker();
+  t.after(() => worker.dispose());
+  await worker.start();
+  const game = harness(t, worker.origin);
+  const [host, outgoing, c, d] = game.players;
+  await game.setup();
+  for (const p of [outgoing, c, d]) await game.join(p);
+  await game.apply(host, "start");
+  await game.bidAll(game.players, [3, 2, 2, 2]);
+  const target = outgoing.view.seat;
+  const bidder = host.view.seats[target].id;
+  const remaining = outgoing.view.hand;
+  await game.apply(outgoing, "leave");
+  const sub = game.actor("Substitute");
+  await game.join(sub);
+  await waitFor(() => host.view.requests.length === 1);
+  await game.apply(host, "approve", { requestId: host.view.requests[0].id, target, replace: true });
+  await waitFor(() => sub.view.seat === target);
+  const subId = sub.view.seats[target].id;
+  assert.notEqual(subId, bidder);
+  assert.deepEqual(sub.view.hand, remaining);
+  const seated = [host, sub, c, d];
+  await game.playDeal(seated);
+  assert.equal(host.view.scores.game.roundData[1].actuals[bidder], host.view.seats[target].wins);
+  assert.equal(host.view.scores.game.roundData[1].actuals[subId], undefined);
+  const upcomingDealer = host.view.seats[nextSeat(host.view.regularDealer)].id;
+  const order = host.view.seats.map(p => p.id).reverse();
+  await game.apply(host, "order", { value: order });
+  await game.apply(host, "next");
+  assert.deepEqual(host.view.seats.map(p => p.id), order);
+  await game.bidAll(seated, [3, 2, 2, 2]);
+  assert.equal(host.view.scores.game.roundInfo[2].dealerId, upcomingDealer);
+  assert.ok(host.view.scores.game.roundData[2].bids[subId]);
+  await game.apply(host, "end");
+  await waitFor(() => sub.view.phase === "ended");
+  await game.apply(sub, "fresh", { value: sub.name });
+  assert.equal(sub.view.host, true);
+  assert.equal(sub.view.owner, false);
+  assert.equal(sub.view.seats.filter(Boolean).length, 1);
+});
+
+test("first returning friend hosts the next lobby after a completed game and carries balances forward", { timeout: 150_000 }, async t => {
+  const worker = await localWorker();
+  t.after(() => worker.dispose());
+  await worker.start();
+  const game = harness(t, worker.origin);
+  const [a, b, c, d] = game.players;
+  await game.setup();
+  for (const p of [b, c, d]) await game.join(p);
+  await game.apply(a, "start");
+  for (let deal = 1; deal <= 5; deal++) {
+    if (deal > 1) await game.apply(a, "next");
+    await game.bidAll(game.players, [3, 2, 2, 2]);
+    await game.playDeal(game.players);
+  }
+  if (a.view.scores.summary.pendingTie.length) await game.apply(a, "settle", { value: { splitTie: true } });
+  const balances = a.view.scores.summary.payouts;
+  const e = game.actor("E");
+  await e.connect();
+  for (const p of game.players) p.socket.close();
+  await waitFor(() => e.view.sleeping, 72_000);
+  await b.connect();
+  await waitFor(() => b.view.host && b.view.phase === "lobby");
+  assert.deepEqual(b.view.seats.map(p => p?.name ?? null), [b.name, null, null, null]);
+  await game.join(c);
+  await game.join(d);
+  e.socket.close();
+  await game.join(e);
+  await game.apply(b, "settings", { value: { bidSeconds: 0, playSeconds: 0, weights: [5, 10, 15] } });
+  await game.apply(b, "start");
+  const second = b.view.scores;
+  for (const [id, amount] of Object.entries(balances)) assert.equal(second.summary.payouts[id], amount);
+  assert.deepEqual(second.game.settlementConfig.weights, [5, 10, 15]);
+  assert.deepEqual((await game.request(game.ledger + "/history/1")).data.ledger.summary.payouts, balances);
 });

@@ -63,6 +63,7 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
       await guest.getByRole("button", { name: "Join table" }).tap();
       await expect(guest.getByText("You · Online")).toBeVisible();
     }
+    const startedAt = performance.now();
     await host.getByRole("button", { name: "Start game" }).tap();
     const table = (page) => page.getByRole("region", { name: "Table", exact: true });
     const hand = (page) => page.getByRole("region", { name: "Your hand" });
@@ -75,14 +76,20 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
       await expect(table(page).locator('[aria-label="Dealer"]')).toHaveCount(1);
       await expect(table(page).locator('[aria-current="true"]')).toHaveCount(1);
     }
+    await host.getByRole("button", { name: "Pause game" }).tap();
+    await expect(first.getByText("Paused by Host")).toBeVisible();
+    await expect(table(first).locator(".turn-clock")).toHaveAttribute("aria-label", /paused$/);
+    const clockValues = await Promise.all(pages.map(async (page) => Number(await table(page).locator(".turn-clock").textContent())));
+    expect(Math.min(...clockValues)).toBeGreaterThanOrEqual(90 - Math.ceil((performance.now() - startedAt) / 1000));
+    expect(Math.max(...clockValues)).toBeLessThanOrEqual(90);
+    expect(Math.max(...clockValues) - Math.min(...clockValues)).toBeLessThanOrEqual(1);
+    await host.getByRole("button", { name: "Resume game" }).tap();
+    await expect(table(first).locator(".turn-clock")).toHaveAttribute("aria-label", /left$/);
     const original = await Promise.all(pages.map(labels));
     expect(new Set(original.flat()).size).toBe(52);
     const displayOrder = ["Spades", "Hearts", "Clubs", "Diamonds"].flatMap((suit) =>
       ["2", "3", "4", "5", "6", "7", "8", "9", "10", "Jack", "Queen", "King", "Ace"].map((rank) => `${rank} of ${suit}`));
     for (const hand of original) expect(hand).toEqual(displayOrder.filter((card) => hand.includes(card)));
-    const clockValues = await Promise.all(pages.map(async (page) => Number(await table(page).locator(".turn-clock").textContent())));
-    expect(Math.min(...clockValues)).toBeGreaterThan(75);
-    expect(Math.max(...clockValues) - Math.min(...clockValues)).toBeLessThanOrEqual(1);
     for (const page of pages) {
       const dealer = await table(page).locator("[data-seat]").filter({ has: page.locator('[aria-label="Dealer"]') })
         .getAttribute("data-seat");
@@ -110,7 +117,7 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     expect(await Promise.all(pages.map(labels))).toEqual(original);
 
     await third.close();
-    await expect(table(first).locator(".match-seat-offline")).toBeVisible();
+    await expect(table(first).locator('.match-seat[data-online="false"]')).toBeVisible();
     await expect(table(first).locator(".turn-clock")).toHaveAttribute("aria-label", /left$/);
     const reconnected = await contexts[3].newPage();
     pages[3] = reconnected;
@@ -119,9 +126,9 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     expect(await labels(reconnected)).toEqual(original[3]);
     await expect(table(reconnected).locator('[data-seat="south"]')).toContainText("You");
     await contexts[3].setOffline(true);
-    await expect(table(first).locator(".match-seat-offline")).toBeVisible();
+    await expect(table(first).locator('.match-seat[data-online="false"]')).toBeVisible();
     await contexts[3].setOffline(false);
-    await expect(table(first).locator(".match-seat-offline")).toHaveCount(0, { timeout: 10_000 });
+    await expect(table(first).locator('.match-seat[data-online="false"]')).toHaveCount(0, { timeout: 10_000 });
 
     for (const value of [3, 2, 2, 2]) await bid(value);
     const lead = await actingPlayer("Your turn to play");
