@@ -57,7 +57,7 @@ export default function SeatingControls({
   };
 
   return (
-    <Card accent="#d1d5db" bg="#f8fafc">
+    <Card accent="var(--line)" bg="var(--tint)">
       <div
         style={{
           display: "flex",
@@ -69,7 +69,7 @@ export default function SeatingControls({
       >
         <div>
           <h3 style={{ margin: 0 }}>Seating &amp; Dealer</h3>
-          <div style={{ fontSize: 13, color: "#4b5563" }}>
+          <div style={{ fontSize: 13, color: "var(--muted)" }}>
             Seating and dealer changes apply to upcoming rounds.
           </div>
         </div>
@@ -97,10 +97,10 @@ export default function SeatingControls({
                 display: "flex",
                 alignItems: "center",
                 gap: 8,
-                background: "#fff",
+                background: "var(--surface)",
                 padding: "8px 12px",
                 borderRadius: 10,
-                border: "1px solid #e5e7eb",
+                border: "1px solid var(--line)",
               }}
             >
               <span style={{ width: 24, textAlign: "center" }}>{index + 1}</span>
@@ -183,8 +183,8 @@ export default function SeatingControls({
                 marginTop: 8,
                 padding: 12,
                 borderRadius: 12,
-                border: "1px dashed #d1d5db",
-                background: "#f9fafb",
+                border: "1px dashed var(--line)",
+                background: "var(--tint)",
                 display: "grid",
                 gap: 10,
               }}
@@ -252,20 +252,20 @@ export default function SeatingControls({
               >
                 Apply Substitute
               </button>
-              <div style={{ fontSize: 12, color: "#6b7280" }}>
+              <div style={{ fontSize: 12, color: "var(--muted)" }}>
                 Substitutions are available before the first round is played.
               </div>
             </div>
           )}
 
           {error && (
-            <div style={{ color: "crimson", fontSize: 13 }}>{error}</div>
+            <div style={{ color: "var(--danger)", fontSize: 13 }}>{error}</div>
           )}
         </div>
       )}
 
       {!isAdmin && (
-        <div style={{ fontSize: 13, color: "#6b7280", marginTop: 8 }}>
+        <div style={{ fontSize: 13, color: "var(--muted)", marginTop: 8 }}>
           Only the admin can change seating or dealer order.
         </div>
       )}

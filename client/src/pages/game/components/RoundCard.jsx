@@ -48,10 +48,10 @@ export default function RoundCard({
   }, [roundData.status]);
 
   const statusColor = useMemo(() => {
-    if (roundData.status === "AUTO_AWARDED") return "#0a7";
+    if (roundData.status === "AUTO_AWARDED") return "var(--action)";
     if (roundData.status === "PLAYED") return "#2563eb";
-    if (roundData.status === "BIDS_SET") return "#111";
-    return "#999";
+    if (roundData.status === "BIDS_SET") return "var(--ink)";
+    return "var(--muted)";
   }, [roundData.status]);
 
   const bidderOrder = info?.bidderOrder || players.map((p) => p.id);
@@ -159,9 +159,9 @@ export default function RoundCard({
               <td style={{ ...tdStyle, textAlign: "left" }}>
                 {player.name}
                 {player.id === firstBidderId && (
-                  <small style={{ color: "#555" }}> (1st)</small>
+                  <small style={{ color: "var(--muted)" }}> (1st)</small>
                 )}
-                {player.id === dealerId && <b style={{ color: "#c2410c" }}> (D)</b>}
+                {player.id === dealerId && <b style={{ color: "var(--warning)" }}> (D)</b>}
               </td>
               <td style={tdStyle}>
                 {isAdmin && isEditingBids ? (
@@ -243,8 +243,8 @@ export default function RoundCard({
           <div
             style={{
               ...pillStyle,
-              background: "#eef2ff",
-              borderColor: "#dbeafe",
+              background: "var(--tint)",
+              borderColor: "var(--tint)",
             }}
           >
             Committed Total: <b style={{ marginLeft: 6 }}>{bidTotalCommitted}</b>
@@ -255,8 +255,8 @@ export default function RoundCard({
           <div
             style={{
               ...pillStyle,
-              background: "#ecfeff",
-              borderColor: "#bae6fd",
+              background: "var(--tint)",
+              borderColor: "var(--line)",
             }}
             title="13 − sum(typed actuals)"
           >
@@ -269,8 +269,8 @@ export default function RoundCard({
             <button
               style={{
                 ...btnStyle,
-                background: allBidsFilled ? "#0a7" : "#9ca3af",
-                border: `1px solid ${allBidsFilled ? "#0a7" : "#9ca3af"}`,
+                background: allBidsFilled ? "var(--action)" : "#9ca3af",
+                border: `1px solid ${allBidsFilled ? "var(--action)" : "#9ca3af"}`,
               }}
               disabled={!allBidsFilled || saving}
               onClick={() => onSubmitBids(roundNumber)}
@@ -294,9 +294,9 @@ export default function RoundCard({
                 style={{
                   ...btnStyle,
                   background:
-                    allActualsFilled && actualsSum === 13 ? "#0a7" : "#9ca3af",
+                    allActualsFilled && actualsSum === 13 ? "var(--action)" : "#9ca3af",
                   border: `1px solid ${
-                    allActualsFilled && actualsSum === 13 ? "#0a7" : "#9ca3af"
+                    allActualsFilled && actualsSum === 13 ? "var(--action)" : "#9ca3af"
                   }`,
                 }}
                 disabled={!allActualsFilled || actualsSum !== 13 || saving}
@@ -322,10 +322,10 @@ export default function RoundCard({
       {error && (
         <div role="alert"
           style={{
-            color: "crimson",
+            color: "var(--danger)",
             marginTop: 8,
             fontSize: 13,
-            background: "#fff1f2",
+            background: "var(--danger-surface)",
             padding: "6px 10px",
             borderRadius: 6,
           }}
@@ -335,7 +335,7 @@ export default function RoundCard({
       )}
 
       {roundData.status === "AUTO_AWARDED" && (
-        <div style={{ color: "#0a7", marginTop: 6 }}>Auto-awarded (bid + 0.1)</div>
+        <div style={{ color: "var(--link)", marginTop: 6 }}>Auto-awarded (bid + 0.1)</div>
       )}
     </Card>
   );

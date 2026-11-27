@@ -5,9 +5,9 @@ export default function ErrorBanner({ message }) {
   return (
     <div
       style={{
-        color: "crimson",
-        background: "#fff1f2",
-        border: "1px solid #fecdd3",
+        color: "var(--danger)",
+        background: "var(--danger-surface)",
+        border: "1px solid var(--line)",
         padding: 10,
         borderRadius: 8,
         marginTop: 12,

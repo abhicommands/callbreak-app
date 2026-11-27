@@ -36,13 +36,13 @@ export default function PayoutLeaderboard({ summary, children }) {
               <td style={tdStyle}>{index + 1}</td>
               <td style={{ ...tdStyle, textAlign: "left" }}>{row.name}</td>
               <td style={tdStyle}>
-                <b>{formatBalance(row.amount)}</b>
+                <b className={row.amount > 0 ? "balance-credit" : row.amount < 0 ? "balance-debit" : undefined}>{formatBalance(row.amount)}</b>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
-      <div style={{ fontSize: 12, color: "#777", marginTop: 6 }}>
+      <div style={{ fontSize: 12, color: "var(--muted)", marginTop: 6 }}>
         Ledger updates after side games and final settlement.
       </div>
       {children}

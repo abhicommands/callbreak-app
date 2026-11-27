@@ -20,8 +20,8 @@ export default function AdminActions({
         <button
           style={{
             ...btnStyle,
-            background: canResolve ? "#0a7" : "#9ca3af",
-            border: `1px solid ${canResolve ? "#0a7" : "#9ca3af"}`,
+            background: canResolve ? "var(--action)" : "#9ca3af",
+            border: `1px solid ${canResolve ? "var(--action)" : "#9ca3af"}`,
           }}
           disabled={!canResolve || saving}
           onClick={() => onResolveGame({})}
@@ -31,7 +31,7 @@ export default function AdminActions({
       )}
       {settlementApplied && (
         <button
-          style={{ ...btnStyle, background: "#0a7", border: "1px solid #0a7" }}
+          style={{ ...btnStyle, background: "var(--action)", border: "1px solid var(--action)" }}
           disabled={saving}
           onClick={onNextGame}
         >

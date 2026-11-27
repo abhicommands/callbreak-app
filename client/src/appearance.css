@@ -1,0 +1,130 @@
+:root {
+  --bg: #f7f5ef; --ink: #202f35; --surface: #fffefa; --line: #d8d9d1;
+  --tint: #efeee7; --muted: #516267; --link: #234f66; --action: #244e65;
+  --felt: #365773; --felt-light: #567896; --rail: #182c3b;
+  --danger: #9f3343; --danger-surface: #fff0ee; --warning: #874715; --warning-surface: #fbf0db;
+}
+:root[data-theme="felt"] {
+  --bg: #edf1e9; --ink: #142f26; --surface: #fffffa; --line: #cdd7c9;
+  --tint: #e4ebe0; --muted: #4c6359; --action: #225540; --link: #215941;
+  --felt: #155740; --felt-light: #2f7959; --rail: #102f26;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark; --bg: #101719; --ink: #edf0e9; --surface: #1b2629; --line: #394748;
+  --tint: #283638; --muted: #b7c6c3; --link: #a6d8c6; --action: #335f55;
+  --felt: #293d4e; --felt-light: #475969; --rail: #142027;
+  --danger: #ffb4b4; --danger-surface: #44292f; --warning: #f6c782; --warning-surface: #403422;
+}
+body { background: var(--bg); color: var(--ink); }
+.app-bar { max-width: 1140px; margin: 0 auto; padding: max(6px,env(safe-area-inset-top)) max(16px,env(safe-area-inset-right)) 6px max(16px,env(safe-area-inset-left)); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); }
+.app-bar a { display: inline-flex; align-items: center; min-height: 44px; gap: 8px; color: var(--ink); text-decoration: none; font: bold 1.22rem Georgia,serif; }
+.app-bar a span { color: var(--link); font-size: 1.65rem; }
+.app-bar select { background: var(--surface); color: var(--ink); padding: 0 10px; height: 44px; border: 1px solid var(--line); border-radius: 10px; font: inherit; }
+.mode-home { color: var(--ink); padding-top: clamp(24px,6vh,66px); }
+.mode-title h1,.online-page h1,.ledger-page h1 { font-family: Georgia,serif; font-weight: 600; letter-spacing: -.045em; }
+.mode-title > span { display: none; }
+.mode-tile,.online-panel { background: var(--surface); border-color: var(--line); box-shadow: 0 8px 28px #15271e0c; }
+.mode-play .mode-art,.card-felt::before {
+  background: repeating-linear-gradient(60deg,transparent 0 2px,#ffffff06 2px 3px),
+    radial-gradient(ellipse at 45% 35%,var(--felt-light),var(--felt) 70%,var(--rail));
+}
+.mode-ledger .mode-art { background: repeating-linear-gradient(0deg,transparent 0 17px,#78897728 17px 18px),#c9d6c7; }
+.mode-card,.mode-sheet { color: #1d3029; }
+.mode-card-left,.mode-card-right { color: #aa3149; }
+.mode-caption p,.online-muted,.online-roster li span,.online-rules dt { color: var(--muted); }
+.mode-caption > span,.online-roster li { background: var(--tint); }
+.mode-caption h2 { font: 600 clamp(1.35rem,3vw,1.85rem) Georgia,serif; }
+.online-page { --online-ink: var(--ink); --online-action: var(--action); --online-line: var(--line); }
+.online-page a,.ledger-jumps a,.ledger-options summary { color: var(--link); }
+.online-page :is(input,select),.ledger-page :is(input,select),.ledger-options select { color: var(--ink); background: var(--surface); border-color: var(--line); }
+.online-page .online-secondary,.online-page .setting-presets button,.ledger-controls button[aria-pressed=false] { color: var(--ink); background: var(--tint); border-color: var(--line); }
+.online-page .setting-presets button[aria-pressed=true] { color: white; background: var(--action); }
+.ledger-page { color: var(--ink); }
+.ledger-page section[aria-label],.ledger-heading { box-shadow: 0 5px 20px #1820200a; }
+.ledger-heading { border-top: 3px solid var(--link) !important; }
+.ledger-jumps { margin: 8px 0; }
+.ledger-jumps a { background: var(--tint); border-radius: 24px; padding: 0 16px; text-decoration: none; }
+.ledger-page table,.online-scores { font-variant-numeric: tabular-nums; }
+.ledger-page thead,.online-scores thead,.ledger-page tbody tr:nth-child(even),.online-scores tbody tr:nth-child(even) { background: var(--tint); }
+.ledger-page button { min-height: 44px; }
+.tie-settlement { background: var(--warning-surface); color: var(--ink); }
+.online-in-game .online-header { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 14px; }
+.online-in-game .online-header h1 { flex: 1; margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.online-in-game .online-header :is(a,button) { font-size: .83rem; }
+.online-in-game .expand-table { border-radius: 22px; }
+.online-in-game[data-expanded] {
+  position: fixed; z-index: 50; inset: 0; width: 100%; height: 100dvh; max-width: none; overflow: auto;
+  overscroll-behavior: contain; background: var(--bg); padding-top: max(2px,env(safe-area-inset-top));
+}
+.online-in-game[data-expanded] .online-header { position: sticky; top: 0; z-index: 8; background: var(--bg); }
+.online-in-game[data-expanded] .match-live { min-height: calc(100dvh - 80px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+.match-layout { background: var(--rail); border: 1px solid #536558; border-radius: 20px; }
+.match-surface { display: flex; flex-direction: column; padding: 14px 12px 10px; }
+.card-felt { flex: 1 0 auto; min-height: clamp(200px,36dvh,430px); }
+.card-felt::before { border: 3px solid #a99770; box-shadow: 0 0 0 4px #333831,0 0 0 6px #73664e,inset 0 0 30px #051b1a77; }
+.felt-mark { display: grid; place-items: center; width: 55px; height: 55px; border: 1px solid #fff2; transform: translate(-50%,-50%) rotate(45deg); border-radius: 12px; }
+.felt-mark span { transform: rotate(-45deg); color: #fff3; font: 40px Georgia,serif; }
+.match-seat { background: #172825; border-radius: 12px; border-color: #81978d; }
+.match-status { padding-bottom: 12px; }
+.match-status strong[data-your-turn] { color: #ffe0a2; }
+.match-status strong[data-your-turn]::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 100%; background: currentColor; }
+.online-page .match-hand { background: #13231f; padding: 12px; border-top: 1px solid #ffffff2e; }
+.match-cards { gap: 7px 4px; }
+.online-page .playing-card { background: linear-gradient(145deg,#fffdf6 10%,#f6f3e9); border-color: #e9ddc1; border-radius: 7px; }
+.card-pip { right: 8%; bottom: 4%; font-size: 1.7em; }
+.pip-field { position: absolute; inset: 14% 10% 12% 42%; display: grid; grid-template: repeat(7,1fr)/repeat(5,1fr); align-items: center; justify-items: center; }
+.pip-field i { font: normal clamp(7px,1vw,12px)/.8 Georgia,serif; }
+.online-page .match-cards .playing-card[aria-pressed=true] { z-index: 3; outline-color: #ffcf72; box-shadow: 0 6px 14px #0007; }
+@media (orientation: landscape) and (min-width: 530px) {
+  .online-in-game[data-expanded] .match-live { grid-template-columns: minmax(0,1.45fr) minmax(0,1fr); }
+  .online-in-game[data-expanded] .match-hand { align-self: stretch; align-content: center; border-left: 1px solid #fff2; }
+  .online-in-game[data-expanded] .card-felt { min-height: 185px; }
+}
+@media (max-width: 600px) {
+  .online-in-game .online-header h1 { font-size: .98rem; }
+  .online-in-game .online-header { gap: 6px; }
+  .online-in-game .online-header .expand-table { padding-inline: 9px; }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .match-seat-turn .seat-avatar { animation: seat-arrival 320ms ease-out; }
+  .match-status strong[data-your-turn]::before { animation: turn-beacon 2s ease-in-out infinite; }
+  .mode-play:hover .mode-card-left { transform: translateX(-52px) rotate(-30deg); }
+  .mode-card { transition: transform 220ms ease; }
+  @keyframes seat-arrival { 0% { scale: .85; } 55% { scale: 1.08; } }
+  @keyframes turn-beacon { 50% { box-shadow: 0 0 0 4px #ffdc8b25; } }
+}
+.match-seat-turn { border-color: #ffdb89; }
+.online-page .match-bids { position: static; width: 100%; transform: none; padding-top: 12px; }
+.online-page .match-bids div { display: grid; grid-template-columns: repeat(auto-fit,minmax(44px,1fr)); max-width: 560px; margin: auto; }
+.online-page .match-bids button { min-height: 44px; border-radius: 10px; font-variant-numeric: tabular-nums; }
+.ledger-jumps { position: sticky; top: 0; z-index: 3; gap: 6px; padding: 4px 0; background: var(--bg); }
+.ledger-page :is([id^=deal-],#balances,#standings) { scroll-margin-top: 60px; }
+.ledger-home input:not([type=checkbox]),.ledger-home select { min-height: 44px; }
+.balance-credit { color: var(--link); }
+.balance-debit { color: var(--danger); }
+.ledger-home h1 { font-size: clamp(2rem,6vw,3.5rem); margin: .35em 0; }
+@media (min-width: 820px) {
+  .ledger-home { display: grid; grid-template-columns: 1.5fr 1fr; gap: 0 18px; align-content: start; }
+  .ledger-home h1 { grid-column: 1/-1; }
+  .ledger-home section:first-of-type { grid-row: span 2; }
+  .ledger-home section { align-self: start; }
+}
+@media (max-width: 600px) and (orientation: portrait) {
+  .online-in-game[data-expanded] { padding-inline: max(4px,env(safe-area-inset-left)) max(4px,env(safe-area-inset-right)); }
+  .online-in-game[data-expanded] .match-live { grid-template-rows: minmax(min-content,1fr) auto; margin-top: 2px; }
+  .online-in-game[data-expanded] .match-surface { padding: 7px; }
+  .online-in-game[data-expanded] .match-status { min-height: 28px; padding-bottom: 4px; }
+  .online-in-game[data-expanded] .card-felt { min-height: 145px; height: clamp(145px,29dvh,340px); }
+  .online-in-game[data-expanded] .match-hand { padding: 6px 7px 10px; }
+  .online-in-game[data-expanded] .match-cards { gap: 3px; --card-height: clamp(44px,8.4dvh,80px); }
+  .online-in-game[data-expanded] .match-hand-heading { margin: 4px 0 7px; }
+  .online-in-game[data-expanded] .hand-hint { margin: 2px 0 10px; }
+}
+.deal-strip { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 4px; margin-top: 12px; }
+.deal-strip a { min-height: 54px; display: grid; align-content: center; gap: 3px; padding: 6px; text-align: center; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 9px; text-decoration: none; }
+.deal-strip small { color: var(--muted); }
+.deal-strip a[aria-current=step] { background: var(--action); border-color: var(--action); color: #fff; }
+.deal-strip a[aria-current=step] small { color: #edf7f0; }
+.sync-state::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; background: #bb833a; border-radius: 50%; }
+.sync-state[data-online]::before { background: #408b69; }
+#ledger-access { scroll-margin-top: 60px; }

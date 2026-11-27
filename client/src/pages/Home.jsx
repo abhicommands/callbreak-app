@@ -1,6 +1,6 @@
 // src/pages/Home.jsx
 import React, { useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { editorStorageKey, recoveryStorageKey, setupLedger } from "../api.js";
 
 export default function Home() {
@@ -98,8 +98,7 @@ export default function Home() {
   }
 
   return (
-    <div style={wrap}>
-      <Link to="/" style={{ color: "#253755" }}>Callbreak</Link>
+    <div className="ledger-page ledger-home" style={wrap}>
       <h1>Callbreak Ledger</h1>
 
       <section style={card}>
@@ -147,8 +146,8 @@ export default function Home() {
           }}
         >
           <div>
-            <label style={labelSm}>Weight (2nd)</label>
-            <input
+            <label htmlFor="weight-0" style={labelSm}>Weight (2nd)</label>
+            <input id="weight-0"
               inputMode="decimal"
               style={input}
               value={weights[0]}
@@ -159,8 +158,8 @@ export default function Home() {
             />
           </div>
           <div>
-            <label style={labelSm}>Weight (3rd)</label>
-            <input
+            <label htmlFor="weight-1" style={labelSm}>Weight (3rd)</label>
+            <input id="weight-1"
               inputMode="decimal"
               style={input}
               value={weights[1]}
@@ -171,8 +170,8 @@ export default function Home() {
             />
           </div>
           <div>
-            <label style={labelSm}>Weight (4th)</label>
-            <input
+            <label htmlFor="weight-2" style={labelSm}>Weight (4th)</label>
+            <input id="weight-2"
               inputMode="decimal"
               style={input}
               value={weights[2]}
@@ -185,8 +184,8 @@ export default function Home() {
         </div>
 
         <div style={{ marginTop: 12 }}>
-          <label style={label}>First dealer</label>
-          <select
+          <label htmlFor="first-dealer" style={label}>First dealer</label>
+          <select id="first-dealer"
             value={startDealerIndex}
             onChange={(e) => setStartDealerIndex(Number(e.target.value))}
             style={{ ...input, width: "100%", maxWidth: 240 }}
@@ -255,10 +254,10 @@ export default function Home() {
 
 const wrap = { maxWidth: 900, margin: "24px auto", padding: "0 12px" };
 const card = {
-  border: "1px solid #e5e5e5",
+  border: "1px solid var(--line)",
   padding: 16,
   borderRadius: 12,
-  background: "#fff",
+  background: "var(--surface)",
   marginTop: 16,
 };
 const label = { display: "block", marginTop: 8, fontWeight: 600 };
@@ -270,7 +269,7 @@ const labelSm = {
 };
 const input = {
   padding: 8,
-  border: "1px solid #ccc",
+  border: "1px solid var(--line)",
   borderRadius: 8,
   width: "100%",
 };
@@ -278,14 +277,14 @@ const btn = {
   padding: "10px 16px",
   borderRadius: 8,
   border: "1px solid #333",
-  background: "#111",
+  background: "var(--action)",
   color: "#fff",
   cursor: "pointer",
 };
 const errBox = {
-  color: "crimson",
-  background: "#fff1f2",
-  border: "1px solid #fecdd3",
+  color: "var(--danger)",
+  background: "var(--danger-surface)",
+  border: "1px solid var(--line)",
   padding: 10,
   borderRadius: 8,
   marginTop: 10,

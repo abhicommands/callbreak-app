@@ -28,7 +28,7 @@ export default function GameHistory({
   const names = Object.fromEntries(players.map(({ id, name }) => [id, name]));
 
   return (
-    <Card accent="#c7d2fe" bg="#eef2ff">
+    <Card accent="var(--line)" bg="var(--tint)">
       <div
         style={{
           display: "flex",
@@ -65,17 +65,17 @@ export default function GameHistory({
       </div>
 
       {error && (
-        <div style={{ color: "crimson", marginTop: 8, fontSize: 13 }}>{error}</div>
+        <div style={{ color: "var(--danger)", marginTop: 8, fontSize: 13 }}>{error}</div>
       )}
 
       {loading && (
-        <div style={{ marginTop: 12, fontSize: 13, color: "#4b5563" }}>
+        <div style={{ marginTop: 12, fontSize: 13, color: "var(--muted)" }}>
           Loading history…
         </div>
       )}
 
       {!loading && history && roundSummaries.length === 0 && !error && (
-        <div style={{ marginTop: 12, fontSize: 13, color: "#4b5563" }}>
+        <div style={{ marginTop: 12, fontSize: 13, color: "var(--muted)" }}>
           No rounds recorded for this game yet.
         </div>
       )}
@@ -86,7 +86,7 @@ export default function GameHistory({
             style={{
               marginTop: 12,
               fontSize: 13,
-              color: "#4b5563",
+              color: "var(--muted)",
               display: "flex",
               gap: 10,
               flexWrap: "wrap",
@@ -117,7 +117,7 @@ export default function GameHistory({
               <div key={round} style={{ marginTop: 16 }}>
                 <h4 style={{ margin: "0 0 8px" }}>
                   Round {round}
-                  <span style={{ fontSize: 13, color: "#6b7280", marginLeft: 8 }}>
+                  <span style={{ fontSize: 13, color: "var(--muted)", marginLeft: 8 }}>
                     {snapshot.status} · Dealer {names[snapshot.dealerId]}
                   </span>
                 </h4>

@@ -2,6 +2,7 @@ import { readTableSettings } from "./readTableSettings.js";
 import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { ledgerPath, randomHex, request } from "../../api.js";
+import useExpandedTable from "./useExpandedTable.js";
 import MatchTable from "./MatchTable.jsx";
 import TieSettlement from "../game/components/TieSettlement.jsx";
 import { RulesSummary, SettingsFields } from "./TableSettings.jsx";
@@ -144,6 +145,8 @@ function Room({ tableId }) {
   const between = ["lobby", "between", "finished", "side-result"].includes(view?.phase);
   const seated = view?.seat >= 0;
   const inGame = view?.round > 0 && seated;
+  const roomRef = useRef(null);
+  const { active: fullscreen, toggle: toggleFullscreen } = useExpandedTable(inGame, roomRef);
   const member = seated || view?.host;
   useEffect(() => {
     if (member) request(ledgerPath(tableId) + "/visit", { token, body: {} }).catch(() => {});
@@ -158,7 +161,10 @@ function Room({ tableId }) {
     return () => { active = false; };
   }, [error, navigate, tableId, view]);
 
+  const submitting = useRef(false);
   async function submit(action) {
+    if (submitting.current) return;
+    submitting.current = true;
     setBusy(true);
     setActionError("");
     try {
@@ -166,6 +172,7 @@ function Room({ tableId }) {
     } catch (err) {
       setActionError(err.message);
     } finally {
+      submitting.current = false;
       setBusy(false);
     }
   }
@@ -227,11 +234,28 @@ function Room({ tableId }) {
     });
   }
 
+  const recoveryPanel = view && (
+    <details className="online-panel">
+      <summary>Reconnect from another browser</summary>
+      {seated && <label>Private seat code<input value={token} readOnly onFocus={(event) => event.target.select()} /></label>}
+      {view.host && recovery && <label>Host recovery code<input value={recovery} readOnly
+        onFocus={(event) => event.target.select()} /></label>}
+      {seated && <p>Save your codes privately. Reopening this link in the same browser reconnects you automatically.</p>}
+      {!seated && <>
+        {view.phase !== "ended" && <CodeForm title="Use a seat code" busy={busy} onSubmit={(event) => reconnect(event, false)} />}
+        {!view.host && <CodeForm title="Recover host access" busy={busy} onSubmit={(event) => reconnect(event, true)} />}
+      </>}
+    </details>
+  );
+
   return (
-    <main className={`online-page${inGame ? " online-in-game" : ""}`}>
+    <main ref={roomRef} data-expanded={fullscreen || undefined} className={`online-page${inGame ? " online-in-game" : ""}`}>
       <header className="online-header">
-        <Link to="/play">{inGame ? "‹ Lobby" : "Online Callbreak"}</Link>
+        {!inGame && <Link to="/play">Online Callbreak</Link>}
         {inGame && <h1>{view.name}</h1>}
+        {inGame && <button className="expand-table" aria-pressed={fullscreen} onClick={toggleFullscreen}>
+          {fullscreen ? "Exit full screen" : "Full screen"}
+        </button>}
         {view?.hasLedger && <Link to={`/ledger/${tableId}`} target={inGame ? "_blank" : undefined}
           rel={inGame ? "noopener" : undefined}>Open ledger</Link>}
       </header>
@@ -259,7 +283,7 @@ function Room({ tableId }) {
               ))}
             </ol>
           </section>}
-          {inGame && <MatchTable key={view.gameIndex} view={view} ready={ready} command={command} serverOffset={serverOffset} />}
+          {inGame && <MatchTable key={view.gameIndex} view={view} ready={ready} connected={connected} command={command} serverOffset={serverOffset} />}
           {view.phase === "lobby" && view.host && (
             <section className="online-panel">
               <h2>{view.seats.filter((player) => player?.reserved).length} of 4 seats reserved</h2>
@@ -305,39 +329,27 @@ function Room({ tableId }) {
           )}
         </>
       )}
-      {view?.host && (
+      {seated && view.seats[view.seat]?.left && <button disabled={!ready} onClick={() => command("return")}>Return to game</button>}
+      {(seated || view?.host) ? (
         <details className="online-panel table-controls" open={view.phase === "ended" || undefined}>
           <summary>Table controls</summary>
           {inGame && <RulesSummary settings={view.settings} />}
           <div className="online-actions">
-            {between && view.seats.map((player, seat) => player && !player.host && (
+            {view.host && between && view.seats.map((player, seat) => player && !player.host && (
               <button className="online-secondary" disabled={!ready} key={seat} onClick={() => {
                 if (window.confirm(`Remove ${player.name} from this seat?`)) command("remove", { target: seat });
               }}>Remove {player.name}</button>
             ))}
-            {view.hasLedger && <button className="online-secondary" onClick={backup} disabled={busy}>Export ledger</button>}
-            {view.phase !== "ended" && <button className="online-danger" disabled={!ready} onClick={() => {
+            {view.host && view.hasLedger && <button className="online-secondary" onClick={backup} disabled={busy}>Export ledger</button>}
+            {view.host && view.phase !== "ended" && <button className="online-danger" disabled={!ready} onClick={() => {
               if (window.confirm("End this table? Completed deals will stay in the ledger.")) command("end");
             }}>End table</button>}
+            {seated && !view.seats[view.seat]?.left && (!between || !view.host) && <button className="online-secondary" disabled={!ready}
+              onClick={() => { if (window.confirm("Give up this seat?")) command("leave"); }}>{between ? "Give up seat" : "Leave game"}</button>}
           </div>
+          {recoveryPanel}
         </details>
-      )}
-      {seated && view.seats[view.seat]?.left && <button disabled={!ready} onClick={() => command("return")}>Return to game</button>}
-      {seated && !view.seats[view.seat]?.left && (!between || !view.host) && <button className="online-secondary" disabled={!ready}
-        onClick={() => { if (window.confirm("Give up this seat?")) command("leave"); }}>{between ? "Give up seat" : "Leave game"}</button>}
-      {view && (
-        <details className="online-panel">
-          <summary>Reconnect from another browser</summary>
-          {seated && <label>Private seat code<input value={token} readOnly onFocus={(event) => event.target.select()} /></label>}
-          {view.host && recovery && <label>Host recovery code<input value={recovery} readOnly
-            onFocus={(event) => event.target.select()} /></label>}
-          {seated && <p>Save your codes privately. Reopening this link in the same browser reconnects you automatically.</p>}
-          {!seated && <>
-            {view.phase !== "ended" && <CodeForm title="Use a seat code" busy={busy} onSubmit={(event) => reconnect(event, false)} />}
-            {!view.host && <CodeForm title="Recover host access" busy={busy} onSubmit={(event) => reconnect(event, true)} />}
-          </>}
-        </details>
-      )}
+      ) : recoveryPanel}
     </main>
   );
 }

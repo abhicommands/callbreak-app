@@ -6,6 +6,15 @@ import TieSettlement from "../game/components/TieSettlement.jsx";
 const RANKS = { A: "Ace", K: "King", Q: "Queen", J: "Jack" };
 const SUITS = { S: ["♠", "Spades"], H: ["♥", "Hearts"], D: ["♦", "Diamonds"], C: ["♣", "Clubs"] };
 
+// Each pair locates a pip on a five-column, seven-row card face.
+const pipRows = {
+  2: ["31", "37"], 3: ["31", "34", "37"], 4: ["11", "51", "17", "57"],
+  5: ["11", "51", "34", "17", "57"], 6: ["11", "51", "14", "54", "17", "57"],
+  7: ["11", "51", "32", "14", "54", "17", "57"], 8: ["11", "51", "32", "14", "54", "36", "17", "57"],
+  9: ["11", "51", "13", "53", "34", "15", "55", "17", "57"],
+  10: ["11", "51", "32", "13", "53", "15", "55", "36", "17", "57"],
+};
+
 function PlayingCard({ card, playable, highlighted, selected, onSelect, onPlay, table, style }) {
   const [symbol, suit] = SUITS[card[0]];
   const rank = card.slice(1);
@@ -16,7 +25,9 @@ function PlayingCard({ card, playable, highlighted, selected, onSelect, onPlay, 
   const color = card[0] === "H" || card[0] === "D" ? " playing-card-red" : "";
   const className = `playing-card${color}${highlighted ? " playing-card-legal" : ""}${offset ? " playing-card-drag" : ""}`;
   const content = <><span className="card-rank">{rank}<small>{symbol}</small></span>
-    <span className="card-pip">{symbol}</span></>;
+    {pipRows[rank] ? <span className="pip-field" aria-hidden="true">{pipRows[rank].map((position) =>
+      <i key={position} style={{ gridColumn: position[0], gridRow: position[1] }}>{symbol}</i>)}</span>
+      : <span className="card-pip" aria-hidden="true">{({ J: "♞", Q: "♛", K: "♚" })[rank] ?? symbol}</span>}</>;
 
   function grab(event) {
     if (event.button !== 0) return;
@@ -211,7 +222,7 @@ function DealResults({ snapshot, view, next, command, ready }) {
   );
 }
 
-export default function MatchTable({ view, ready, command, serverOffset }) {
+export default function MatchTable({ view, ready, connected, command, serverOffset }) {
   const snapshot = view.scores;
   const felt = useRef(null);
   const [released, setReleased] = useState(0);
@@ -233,7 +244,7 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
     const timer = setTimeout(() => setReleased(revealUntil), Math.max(0, revealUntil - performance.now() - offset));
     return () => clearTimeout(timer);
   }, [offset, revealUntil, revealing]);
-  const prompt = active
+  const prompt = !connected ? "Reconnecting…" : !ready ? "Saving move…" : active
     ? !seatsReady ? "A player left. Waiting for their seat to be restored."
       : yourTurn ? (phase === "bidding" ? "Your turn to bid" : "Your turn to play")
         : `${seats[turn]?.name} to ${phase === "bidding" ? "bid" : "play"}`
@@ -251,11 +262,11 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
         <section className="match-surface" aria-label="Table">
           <div className="match-status">
             <span>{side ? `Side game · ${seats[side.bidder]?.name ?? "Bidder"} called ${side.bid}` :
-              `Game ${view.gameIndex} · Deal ${round}/5`}</span>
-            <strong role="status">{prompt}</strong>
+              `Game ${view.gameIndex} · Deal ${round}/5${phase === "playing" ? " · Trick " + (trickNumber + 1) : ""}`}</span>
+            <strong data-your-turn={canAct || undefined} role="status">{prompt}</strong>
           </div>
           <div className="card-felt" ref={felt}>
-            <div className="felt-mark" aria-hidden="true">♠</div>
+            <div className="felt-mark" aria-hidden="true"><span>♠</span></div>
             <div className="felt-trick felt-current-trick" aria-label="Current trick">
               {trick.map(({ seat: player, card }) => (
                 <div key={`${trickNumber + 1}:${card}`} className={`trick-card trick-${position(player)}`}>
@@ -273,8 +284,8 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
                 dealer={index === view.dealer} turn={active && index === turn} clock={view.clock}
                 serverOffset={offset} active={active} lastWon={Boolean(!revealing && player && lastWinnerId === player.id)} />
             ))}
-            {phase === "bidding" && yourTurn && <BidPicker ready={canAct} command={command} />}
           </div>
+          {phase === "bidding" && yourTurn && <BidPicker ready={canAct} command={command} />}
           {(active && phase === "bidding" && previousBidTotal !== null) && (
             <p className="match-notice">Bids totaled {previousBidTotal}. Bid again with the same cards.</p>
           )}

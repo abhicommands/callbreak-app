@@ -2,7 +2,7 @@ import React from "react";
 
 export const wrapStyle = { maxWidth: 1100, margin: "24px auto", padding: "0 12px" };
 
-export function Card({ as = "div", children, accent = "#e5e7eb", bg = "#fff", style = {}, ...props }) {
+export function Card({ as = "div", children, accent = "var(--line)", bg = "var(--surface)", style = {}, ...props }) {
   const viewStyle = {
     border: `1px solid ${accent}`,
     padding: 16,
@@ -24,24 +24,24 @@ export const thStyle = {
   textAlign: "center",
   padding: "8px 6px",
   fontSize: 13,
-  color: "#4b5563",
-  borderBottom: "1px solid #e5e7eb",
+  color: "var(--muted)",
+  borderBottom: "1px solid var(--line)",
 };
 
 export const tdStyle = {
   textAlign: "center",
   padding: "8px 6px",
-  borderBottom: "1px solid #eef2f7",
+  borderBottom: "1px solid var(--line)",
   fontSize: 14,
 };
 
 export const inputStyle = {
   padding: 8,
-  border: "1px solid #cbd5f5",
+  border: "1px solid var(--line)",
   borderRadius: 8,
   width: "100%",
   fontSize: 14,
-  background: "#fff",
+  background: "var(--surface)",
 };
 
 export const smallInputStyle = {
@@ -54,8 +54,8 @@ export const smallInputStyle = {
 export const btnStyle = {
   padding: "10px 16px",
   borderRadius: 8,
-  border: "1px solid #1f2937",
-  background: "#111827",
+  border: "1px solid var(--action)",
+  background: "var(--action)",
   color: "#fff",
   cursor: "pointer",
   fontSize: 14,
@@ -63,8 +63,9 @@ export const btnStyle = {
 
 export const lightBtnStyle = {
   ...btnStyle,
-  background: "#4b5563",
-  border: "1px solid #4b5563",
+  background: "var(--tint)",
+  color: "var(--ink)",
+  border: "1px solid var(--line)",
 };
 
 export const dangerBtnStyle = {
@@ -78,8 +79,8 @@ export const pillStyle = {
   alignItems: "center",
   padding: "4px 8px",
   borderRadius: 999,
-  background: "#f3f4f6",
-  border: "1px solid #e5e7eb",
+  background: "var(--tint)",
+  border: "1px solid var(--line)",
   fontSize: 13,
 };
 

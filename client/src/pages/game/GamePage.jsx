@@ -186,13 +186,23 @@ export default function GamePage({ seriesId }) {
         stake={game.settlementConfig.stake}
         connected={connected}
       />
+      <nav className="deal-strip" aria-label="Five-deal scorecard">
+        {rounds.map((round) => {
+          const status = game.roundData[round]?.status;
+          const label = ["PLAYED", "AUTO_AWARDED"].includes(status) ? "Scored" :
+            game.highBid?.round === round ? "Side call" : status === "BIDS_SET" ? "Bids in" : "Open";
+          return <a key={round} href={`#deal-${round}`} aria-current={round === openRound && !game.closedAt ? "step" : undefined}>
+            <strong>Deal {round}</strong><small>{label}</small>
+          </a>;
+        })}
+      </nav>
       <nav className="ledger-jumps" aria-label="Ledger sections">
-        {openRound && editable && <a href={`#deal-${openRound}`}>Enter deal {openRound} ↓</a>}
+        <a href="#standings">Scores</a>
         <a href="#balances">Balances</a>
+        <a href="#ledger-access">Sharing</a>
       </nav>
       <ErrorBanner message={error || actionError} />
-      <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
-        onEditor={storeEditor} onSnapshot={acceptSnapshot} />
+
 
       <button style={{ ...btnStyle, marginTop: 16 }} onClick={() => setShowHistory(!showHistory)}>
         {showHistory ? "Hide Game History" : "View Game History"}
@@ -235,6 +245,10 @@ export default function GamePage({ seriesId }) {
           )}
         </aside>
       </div>
+      <section id="ledger-access" aria-label="Sharing and backup">
+        <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
+        onEditor={storeEditor} onSnapshot={acceptSnapshot} />
+      </section>
     </PageWrap>
   );
 }

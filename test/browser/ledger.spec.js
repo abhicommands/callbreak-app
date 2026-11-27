@@ -2,6 +2,7 @@ import { test, expect, devices } from "@playwright/test";
 import { localWorker } from "../local-worker.js";
 
 test("mobile editor and independent viewer follow the same ledger", async ({ browser }) => {
+  test.setTimeout(120_000);
   const worker = await localWorker();
   try {
     await worker.start();
@@ -11,6 +12,7 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     const editor = await editorContext.newPage();
     const viewer = await viewerContext.newPage();
     await editor.goto(`${worker.origin}/ledger`);
+    await editor.getByLabel("Appearance", { exact: true }).selectOption("dark");
     await editor.getByLabel(/Auto-award rounds/).check();
     await editor.getByRole("button", { name: "Create Ledger" }).click();
     await expect(editor.getByText("Live sync: Online")).toBeVisible();
@@ -65,7 +67,10 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     };
 
     await bid(1, [4, 2, 2, 2]);
+    const scorecard = viewer.getByRole("navigation", { name: "Five-deal scorecard" });
+    await expect(scorecard.getByRole("link", { name: "Deal 1 Bids in" })).toBeVisible();
     await actual(1, [5, 2, 3, 3]);
+    await expect(scorecard.getByRole("link", { name: "Deal 1 Scored" })).toBeVisible();
     await bid(2, [4, 1, 1, 1]);
     await expect(round(viewer, 2).getByText("AUTO-AWARDED", { exact: true })).toBeVisible();
     await bid(3, [4, 2, 2, 2]);

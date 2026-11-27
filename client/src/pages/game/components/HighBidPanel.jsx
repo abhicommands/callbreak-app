@@ -25,7 +25,7 @@ export default function HighBidPanel({
   );
 
   return (
-    <Card accent="#f59e0b" bg="#fff7ed">
+    <Card accent="#f59e0b" bg="var(--warning-surface)">
       <h3 style={{ marginTop: 0 }}>Side Game (High Bid)</h3>
       <div>
         Triggered in Round <b>{round}</b>
@@ -100,12 +100,12 @@ export default function HighBidPanel({
             No — Bidder Lost
           </button>
         </div>
-        <div style={{ marginTop: 6, color: "#92400e", fontSize: 12 }}>
+        <div style={{ marginTop: 6, color: "var(--warning)", fontSize: 12 }}>
           {pool == null ? `Each opponent pays or receives the stake. The bidder settles with ${opponentCount} opponents.` :
             "The three opponents split the payout equally."}
         </div>
         {error && (
-          <div style={{ marginTop: 8, color: "crimson", fontSize: 13 }}>
+          <div style={{ marginTop: 8, color: "var(--danger)", fontSize: 13 }}>
             {error}
           </div>
         )}

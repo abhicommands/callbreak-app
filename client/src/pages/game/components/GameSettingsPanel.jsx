@@ -10,7 +10,7 @@ export default function GameSettingsPanel({
   return (
     <Card>
       <h3 style={{ marginTop: 0 }}>Game Settings</h3>
-      <div style={{ fontSize: 14, color: "#374151" }}>
+      <div style={{ fontSize: 14, color: "var(--muted)" }}>
         Auto-award when bids total &lt; 10 (rounds 1–4)
       </div>
       <div
@@ -25,8 +25,8 @@ export default function GameSettingsPanel({
         <div
           style={{
             ...pillStyle,
-            background: autoAwardEnabled ? "#dcfce7" : "#fee2e2",
-            borderColor: autoAwardEnabled ? "#86efac" : "#fecaca",
+            background: autoAwardEnabled ? "var(--tint)" : "var(--danger-surface)",
+            borderColor: autoAwardEnabled ? "var(--line)" : "var(--line)",
           }}
         >
           Status: <b style={{ marginLeft: 6 }}>{autoAwardEnabled ? "Enabled" : "Disabled"}</b>
@@ -43,7 +43,7 @@ export default function GameSettingsPanel({
             {autoAwardEnabled ? "Turn Off" : "Turn On"}
           </button>
         ) : (
-          <span style={{ fontSize: 13, color: "#6b7280" }}>
+          <span style={{ fontSize: 13, color: "var(--muted)" }}>
             Only the admin can change this setting.
           </span>
         )}

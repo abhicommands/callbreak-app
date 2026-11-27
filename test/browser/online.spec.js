@@ -10,6 +10,11 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
   try {
     await worker.start();
     for (let seat = 0; seat < 4; seat++) contexts.push(await browser.newContext(phone));
+    if (browser.browserType().name() === "webkit") {
+      for (const context of contexts) await context.addInitScript(() => {
+        Object.defineProperty(document, "fullscreenEnabled", { get: () => false });
+      });
+    }
     const pages = await Promise.all(contexts.map((context) => context.newPage()));
     const [host, first, second, third] = pages;
     await second.addInitScript(() => {
@@ -32,6 +37,9 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
       if (response.url().endsWith("/command") && response.request().postDataJSON()?.action === "bid" && response.ok()) retries++;
     });
     await host.goto(worker.origin);
+    await host.getByLabel("Appearance", { exact: true }).selectOption("dark");
+    await host.reload();
+    await expect(host.locator("html")).toHaveAttribute("data-theme", "dark");
     await expect(host.getByRole("link", { name: /Callbreak Ledger/ })).toBeVisible();
     await host.getByRole("link", { name: /Callbreak Online/ }).tap();
     await host.getByLabel("Your name").fill("Host");
@@ -119,7 +127,13 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     const lead = await actingPlayer("Your turn to play");
     const overflow = (page) => page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth);
     expect(await overflow(lead)).toBe(false);
+    await lead.getByRole("button", { name: "Full screen", exact: true }).tap();
+    await expect(lead.locator(".online-in-game")).toHaveAttribute("data-expanded", "true");
+    await lead.getByRole("button", { name: "Exit full screen" }).tap();
+    await expect(lead.locator(".online-in-game")).not.toHaveAttribute("data-expanded", "true");
+    await expect.poll(() => lead.evaluate(() => Boolean(document.fullscreenElement))).toBe(false);
     await lead.setViewportSize({ width: phone.viewport.height, height: phone.viewport.width });
+    await lead.getByRole("button", { name: "Full screen", exact: true }).tap();
     expect(await overflow(lead)).toBe(false);
     const tableRect = await table(lead).boundingBox();
     const landscapeHand = await hand(lead).boundingBox();
@@ -139,6 +153,8 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     await playable(lead).tap();
     await expect(hand(lead).getByText("12 cards")).toBeVisible();
 
+    await lead.getByRole("button", { name: "Exit full screen" }).tap();
+    await expect(lead.locator(".online-in-game")).not.toHaveAttribute("data-expanded", "true");
     const dragging = await actingPlayer("Your turn to play");
     expect(await hand(dragging).locator("button.playing-card:enabled").count()).toBe(
       await hand(dragging).locator(".playing-card-legal").count());

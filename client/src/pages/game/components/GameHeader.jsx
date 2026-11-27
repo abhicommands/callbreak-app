@@ -10,7 +10,7 @@ export default function GameHeader({
   loading,
 }) {
   return (
-    <Card
+    <Card className="ledger-heading"
       style={{
         display: "flex",
         justifyContent: "space-between",
@@ -20,18 +20,18 @@ export default function GameHeader({
     >
       <div>
         <h1 style={{ margin: 0 }}>{title || "Game"}</h1>
-        <div style={{ color: "#4b5563", fontSize: 14 }}>
+        <div style={{ color: "var(--muted)", fontSize: 14 }}>
           Game {gameId}
         </div>
       </div>
-      <div style={{ textAlign: "right", color: "#4b5563", fontSize: 14 }}>
+      <div style={{ textAlign: "right", color: "var(--muted)", fontSize: 14 }}>
         <div>
           Weights: <b>{(weights || []).join(", ") || "—"}</b>
         </div>
         <div>
           Stake: <b>{stake ?? "—"}</b>
         </div>
-        <div style={{ fontSize: 13, marginTop: 4 }}>
+        <div className="sync-state" data-online={connected || undefined} style={{ fontSize: 13, marginTop: 4 }}>
           Live sync: {loading ? "Connecting…" : connected ? "Online" : "Reconnecting"}
         </div>
       </div>

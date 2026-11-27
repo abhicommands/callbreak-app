@@ -12,7 +12,7 @@ export default function TotalPointsCard({ players = [], totalsPoints = {}, proje
     .sort((a, b) => b.projected - a.projected);
 
   return (
-    <Card>
+    <Card id="standings">
       <h3 style={{ marginTop: 0 }}>Total Points (This Game)</h3>
       <table style={tableStyle}>
         <thead>

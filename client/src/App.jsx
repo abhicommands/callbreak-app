@@ -1,5 +1,6 @@
 import React from "react";
 import { Routes, Route, Navigate, useParams } from "react-router-dom";
+import Appearance from "./Appearance.jsx";
 import Home from "./pages/Home.jsx";
 import Landing from "./pages/Landing.jsx";
 import GamePage from "./pages/game/GamePage.jsx";
@@ -17,7 +18,7 @@ function TableRoute() {
 
 export default function App() {
   return (
-    <Routes>
+    <><Appearance /><Routes>
       <Route path="/" element={<Landing />} />
       <Route path="/group/:id" element={<LegacyGroupLink />} />
       <Route path="/ledger" element={<Home />} />
@@ -25,7 +26,7 @@ export default function App() {
       <Route path="/play/:tableId" element={<TableRoute />} />
       <Route path="/ledger/:seriesId" element={<LedgerRoute />} />
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+    </Routes></>
   );
 }
 
