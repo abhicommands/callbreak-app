@@ -1,6 +1,7 @@
-import React, { useRef, useState } from "react";
+import { readTableSettings } from "./readTableSettings.js";
+import React, { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { randomHex, request } from "../../api.js";
+import { ledgerPath, randomHex, request } from "../../api.js";
 import MatchTable from "./MatchTable.jsx";
 import TieSettlement from "../game/components/TieSettlement.jsx";
 import { RulesSummary, SettingsFields } from "./TableSettings.jsx";
@@ -9,16 +10,6 @@ import "./online.css";
 
 const tableIdPattern = /^[a-f0-9]{32}$/;
 const codePattern = "[a-f0-9]{64}";
-
-function readTableSettings(form) {
-  return {
-    bidSeconds: Number(form.get("bidSeconds")),
-    playSeconds: Number(form.get("playSeconds")),
-    weights: [0, 1, 2].map((index) => Number(form.get(`weight${index}`))),
-    stake: Number(form.get("stake")),
-    minimumBid: Number(form.get("minimumBid")),
-  };
-}
 
 export function OnlineHome() {
   const navigate = useNavigate();
@@ -56,8 +47,8 @@ export function OnlineHome() {
   function join(event) {
     event.preventDefault();
     const input = String(new FormData(event.currentTarget).get("invite")).trim();
-    const id = input.match(/(?:^|\/play\/)([a-f0-9]{32})\/?$/i)?.[1]?.toLowerCase();
-    if (id) navigate(`/play/${id}`);
+    const match = input.match(/(?:^|\/(play|group)\/)([a-f0-9]{32})\/?$/i);
+    if (match) navigate("/" + (match[1]?.toLowerCase() ?? "play") + "/" + match[2].toLowerCase());
     else setError("Enter a table invite link or ID.");
   }
 
@@ -94,7 +85,7 @@ function SeatRequest({ entry, view, ready, command }) {
   const [target, setTarget] = useState("");
   const duringDeal = view.phase === "bidding" || view.phase === "playing";
   const options = view.seats.map((_, seat) => seat).filter((seat) =>
-    seat !== view.seat && (!duringDeal || !view.seats[seat]?.online));
+    seat !== view.seat && (!duringDeal || (!view.seats[seat]?.online || view.seats[seat]?.left)));
   const valid = target !== "" && options.includes(Number(target));
   return (
     <li>
@@ -133,6 +124,7 @@ export function OnlineTablePage({ tableId }) {
 }
 
 function Room({ tableId }) {
+  const navigate = useNavigate();
   const [token, setToken] = useState(() => {
     const key = seatKey(tableId);
     const existing = localStorage.getItem(key);
@@ -152,6 +144,19 @@ function Room({ tableId }) {
   const between = ["lobby", "between", "finished", "side-result"].includes(view?.phase);
   const seated = view?.seat >= 0;
   const inGame = view?.round > 0 && seated;
+  const member = seated || view?.host;
+  useEffect(() => {
+    if (member) request(ledgerPath(tableId) + "/visit", { token, body: {} }).catch(() => {});
+  }, [member, tableId, token]);
+
+  useEffect(() => {
+    if (view || !error?.includes("Table not found")) return;
+    let active = true;
+    request(ledgerPath(tableId) + "/snapshot").then(() => {
+      if (active) navigate("/group/" + tableId, { replace: true });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [error, navigate, tableId, view]);
 
   async function submit(action) {
     setBusy(true);
@@ -227,6 +232,7 @@ function Room({ tableId }) {
       <header className="online-header">
         <Link to="/play">{inGame ? "‹ Lobby" : "Online Callbreak"}</Link>
         {inGame && <h1>{view.name}</h1>}
+        {view && <Link to={`/group/${tableId}`}>Group</Link>}
         {view?.hasLedger && <Link to={`/ledger/${tableId}`} target={inGame ? "_blank" : undefined}
           rel={inGame ? "noopener" : undefined}>Open ledger</Link>}
       </header>
@@ -248,7 +254,7 @@ function Room({ tableId }) {
                 <li key={seat}>
                   <strong>{player?.name || "Open seat"}</strong>
                   <span>{player?.host ? "Host · " : ""}{seat === view.seat ? "You · " : ""}
-                    {player ? (player.online ? "Online" : "Offline") : "Waiting"}
+                    {player ? (player.reserved === false ? "Awaiting player" : player.online ? "Online" : "Offline · reserved") : "Waiting"}
                   </span>
                 </li>
               ))}
@@ -257,25 +263,25 @@ function Room({ tableId }) {
           {inGame && <MatchTable key={view.gameIndex} view={view} ready={ready} command={command} serverOffset={serverOffset} />}
           {view.phase === "lobby" && view.host && (
             <section className="online-panel">
-              <h2>Invite three players</h2>
+              <h2>{view.seats.filter((player) => player?.reserved).length} of 4 seats reserved</h2>
               <label>Invite link<input readOnly value={new URL(`/play/${tableId}`, location.href).href}
                 onFocus={(event) => event.target.select()} /></label>
               <div className="online-actions">
                 <button className="online-secondary" onClick={copyInvite}>Copy invite link</button>
-                <button disabled={!ready || !view.seats.every((player) => player?.online)}
+                <button disabled={!ready || !view.seats.every((player) => player && player.reserved !== false)}
                   onClick={() => command("start")}>Start game</button>
               </div>
               <RulesSummary settings={view.settings} />
-              <details className="table-controls">
+              {!view.prepared && <details className="table-controls">
                 <summary>Game settings</summary>
                 <form onSubmit={(event) => {
                   event.preventDefault();
                   command("settings", { value: readTableSettings(new FormData(event.currentTarget)) });
                 }}>
                   <SettingsFields key={JSON.stringify(view.settings)} settings={view.settings} />
-                  <button disabled={!ready}>Save settings</button>
+                  <button disabled={!ready || view.prepared}>Save settings</button>
                 </form>
-              </details>
+              </details>}
             </section>
           )}
           {!seated && (
@@ -317,8 +323,9 @@ function Room({ tableId }) {
           </div>
         </details>
       )}
-      {between && !view.host && seated && <button className="online-secondary" disabled={!ready}
-        onClick={() => { if (window.confirm("Give up this seat?")) command("leave"); }}>Give up seat</button>}
+      {seated && view.seats[view.seat]?.left && <button disabled={!ready} onClick={() => command("return")}>Return to game</button>}
+      {seated && !view.seats[view.seat]?.left && (!between || !view.host) && <button className="online-secondary" disabled={!ready}
+        onClick={() => { if (window.confirm("Give up this seat?")) command("leave"); }}>{between ? "Give up seat" : "Leave game"}</button>}
       {view && (
         <details className="online-panel">
           <summary>Reconnect from another browser</summary>

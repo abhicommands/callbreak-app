@@ -5,7 +5,12 @@ export type Payload = Record<string, unknown>;
 export type Event = { revision: number; action: string; payload: Payload; at: number };
 
 const fields: Record<string, string[]> = {
-  create: ["name", "players", "weights", "stake", "startDealerIndex", "autoAwardEnabled", "mode", "minimumBid"],
+  create: ["name", "players", "weights", "stake", "startDealerIndex", "autoAwardEnabled", "mode", "minimumBid", "rulesVersion", "pace"],
+  "seat-online-game": ["players", "dealerId"],
+  "finish-group-game": [],
+  "mark-paid": [],
+  "close-group-game": [],
+  "group-next": ["players", "dealerId", "hostId", "mode", "settings"],
   "record-online-round": ["round", "players", "bids", "actuals"],
   "record-online-bids": ["round", "players", "bids"],
   "record-online-highbid": ["round", "bidderId", "won", "remaining"],

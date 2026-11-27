@@ -37,19 +37,29 @@ export default function GamePage({ seriesId }) {
 
   useEffect(() => {
     const key = editorStorageKey(seriesId);
-    const token = localStorage.getItem(key);
-    if (!token) return;
+    const tokens = [...new Set([localStorage.getItem(key), localStorage.getItem(`callbreak:table:seat:${seriesId}`)].filter(Boolean))];
     let active = true;
-    request(`${path}/editor`, { token }).then(() => {
-      if (active && localStorage.getItem(key) === token) setEditorKey(token);
-    }).catch((err) => {
-      if (active && err.status === 403 && localStorage.getItem(key) === token) {
-        localStorage.removeItem(key);
-        setEditorKey("");
+    async function authorize() {
+      for (const token of tokens) {
+        try {
+          await request(path + "/editor", { token });
+          if (active) setEditorKey(token);
+          return;
+        } catch (err) {
+          if (err.status !== 403) return;
+          if (active && localStorage.getItem(key) === token) localStorage.removeItem(key);
+        }
       }
-    });
+      if (active) setEditorKey("");
+    }
+    authorize();
     return () => { active = false; };
   }, [seriesId, path, connected]);
+
+  useEffect(() => {
+    const token = localStorage.getItem(editorStorageKey(seriesId)) || localStorage.getItem(`callbreak:table:seat:${seriesId}`);
+    if (token) request(path + "/visit", { token, body: {} }).catch(() => {});
+  }, [path, seriesId]);
 
   function storeEditor(token) {
     setEditorKey(token);
@@ -132,10 +142,11 @@ export default function GamePage({ seriesId }) {
     );
   }
 
-  const editable = Boolean(editorKey) && !settled;
+  const editable = Boolean(editorKey) && !settled && !game.closedAt;
   const rounds = Array.from({ length: game.rounds }, (_, index) => index + 1);
   const allResolved = !game.highBid && rounds.every((round) =>
     ["AUTO_AWARDED", "PLAYED"].includes(game.roundData[round]?.status));
+  const openRound = rounds.find((round) => !["AUTO_AWARDED", "PLAYED"].includes(game.roundData[round]?.status));
   const latestRecorded = Math.max(0, ...game.recordedRounds);
   const nextDealer = game.roundInfo[latestRecorded + 1]?.dealerId;
   const canSubstitute = editable && game.canSubstitute;
@@ -145,13 +156,14 @@ export default function GamePage({ seriesId }) {
       {editorKey && <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
         onEditor={storeEditor} onSnapshot={acceptSnapshot} />}
       {actionError && <ErrorBanner message={actionError} />}
-      {editorKey && summary.pendingTie?.length > 0 && <TieSettlement players={summary.pendingTie} ready={!saving}
+      {editorKey && !snapshot.onlineTable && summary.pendingTie?.length > 0 && <TieSettlement players={summary.pendingTie} ready={!saving}
         onSettle={(choice) => save("settle-game", choice)} />}
     </OnlineLedger>;
   }
 
   return (
     <PageWrap>
+      <Link className="group-nav-link" to={`/group/${seriesId}`}>Group balances &amp; games</Link>
       <GameHeader
         gameId={game.gameIndex}
         title={game.name}
@@ -159,6 +171,7 @@ export default function GamePage({ seriesId }) {
         stake={game.settlementConfig.stake}
         connected={connected}
       />
+      {openRound && editable && <a className="group-nav-link" href={`#deal-${openRound}`}>Enter deal {openRound} ↓</a>}
       <ErrorBanner message={error || actionError} />
       <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
         onEditor={storeEditor} onSnapshot={acceptSnapshot} />
@@ -177,12 +190,12 @@ export default function GamePage({ seriesId }) {
           {rounds.map((round) => {
             const sideGameAttempt = game.highBid?.round === round ? game.highBid.attempt : 0;
             return (
-              <RoundEditor key={`${gameId}:${round}:${sideGameAttempt}`} round={round} info={game.roundInfo[round]}
+              <div id={`deal-${round}`} key={`${gameId}:${round}:${sideGameAttempt}`}><RoundEditor round={round} info={game.roundInfo[round]}
                 players={game.players} data={game.roundData[round] || emptyRound} game={game}
-                revision={revision} editing={editable} saving={saving} command={command} />
+                revision={revision} editing={editable} saving={saving} command={command} /></div>
             );
           })}
-          <AdminActions isAdmin={Boolean(editorKey)} saving={saving}
+          <AdminActions isAdmin={Boolean(editorKey) && !game.closedAt} saving={saving}
             canResolve={allResolved} settlementApplied={settled} pendingTie={summary.pendingTie ?? []}
             onResolveGame={(choice) => save("settle-game", choice)} onNextGame={() => save("next-game")} />
         </main>

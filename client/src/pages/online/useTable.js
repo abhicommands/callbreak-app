@@ -127,7 +127,7 @@ export function useTable(tableId, token) {
             ping();
             if (++ticks % 2 === 0) {
               sync();
-              send("presence");
+              send("presence-v2");
             }
           }, 4000);
         };
@@ -137,6 +137,13 @@ export function useTable(tableId, token) {
           lastWallSeen = Date.now();
           if (event.data === "pong") return;
           const next = JSON.parse(event.data);
+          if ("presence" in next) {
+            if (view?.seats && view.revision === next.revision && view.seats.some((p, i) => p && p.online !== next.presence[i])) {
+              view = { ...view, seats: view.seats.map((p, i) => p && { ...p, online: next.presence[i] }) };
+              update();
+            }
+            return;
+          }
           if ("ack" in next) {
             const entry = pending.get(next.ack);
             if (!entry) return;
@@ -206,7 +213,7 @@ export function useTable(tableId, token) {
         } else {
           ping();
           sync();
-          send("presence");
+          send("presence-v2");
         }
       } else {
         clearTimeout(retry);

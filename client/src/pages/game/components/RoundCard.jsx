@@ -24,6 +24,7 @@ export default function RoundCard({
   isEditingBids,
   isEditingActuals,
   autoAwardEnabled,
+  pool,
   highBid,
   bidLocked,
   selectedBidder,
@@ -127,7 +128,7 @@ export default function RoundCard({
 
       {highBidActive && (
         <div style={{ marginTop: 12 }}>
-          <HighBidPanel
+          <HighBidPanel pool={pool}
             round={roundNumber}
             bidderIds={highBid.bidderIds || []}
             players={players}

@@ -6,7 +6,7 @@ import TieSettlement from "../game/components/TieSettlement.jsx";
 const RANKS = { A: "Ace", K: "King", Q: "Queen", J: "Jack" };
 const SUITS = { S: ["♠", "Spades"], H: ["♥", "Hearts"], D: ["♦", "Diamonds"], C: ["♣", "Clubs"] };
 
-function PlayingCard({ card, playable, highlighted, onPlay, table, style }) {
+function PlayingCard({ card, playable, highlighted, selected, onSelect, onPlay, table, style }) {
   const [symbol, suit] = SUITS[card[0]];
   const rank = card.slice(1);
   const label = `${RANKS[rank] ?? rank} of ${suit}`;
@@ -45,11 +45,11 @@ function PlayingCard({ card, playable, highlighted, onPlay, table, style }) {
   }
 
   return onPlay
-    ? <button className={className} type="button" aria-label={label} disabled={!playable}
+    ? <button className={className} type="button" aria-label={label} aria-pressed={selected} disabled={!playable}
       style={offset ? { ...style, "--drag-x": `${offset.x}px`, "--drag-y": `${offset.y}px` } : style}
       onPointerDown={grab} onPointerMove={move} onPointerUp={release}
       onPointerCancel={() => { drag.current = null; setOffset(null); }}
-      onClick={(event) => { if (!suppressClick.current || event.detail === 0) onPlay(); }}>{content}</button>
+      onClick={(event) => { if (!suppressClick.current || event.detail === 0) onSelect(); }}>{content}</button>
     : <span className={className} role="img" aria-label={label}>{content}</span>;
 }
 
@@ -170,10 +170,10 @@ function DealResults({ snapshot, view, next, command, ready }) {
   const finished = view.phase === "finished";
   const names = completed ? new Map([...game.players, ...game.inactivePlayers].map(({ id, name }) => [id, name])) : null;
   const leaders = completed ? Object.keys(completed.points).sort((a, b) => completed.points[b] - completed.points[a]) : [];
-  const totals = finished && completed ? Object.entries(snapshot.summary.totalsPoints)
+  const settlement = finished && snapshot?.summary.settlement;
+  const totals = settlement ? settlement.ranking.map(({ id, total }) => [id, total]) : finished && completed ? Object.entries(snapshot.summary.totalsPoints)
     .filter(([id]) => Object.values(game.roundData).some((round) => Object.hasOwn(round.points, id)))
     .sort((a, b) => b[1] - a[1]) : [];
-  const settlement = finished && snapshot?.summary.settlement;
   const winners = settlement && (settlement.winnerIds ?? [settlement.ranking[0].id])
     .map((id) => settlement.ranking.find((entry) => entry.id === id).name);
   const tie = finished ? snapshot?.summary.pendingTie ?? [] : [];
@@ -218,9 +218,11 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
   const { seat, turn, phase, hand, legal, round, trick, lastTrick, seats, previousBidTotal, lastAuto,
     penultimate, lastWinnerId, revealUntil, side } = view;
   const active = phase === "bidding" || phase === "playing";
-  const fourOnline = seats.every((player) => player?.online);
+  const seatsReady = seats.every((player) => player && player.reserved !== false);
+  const [selection, setSelection] = useState(null);
+  const selectedCard = selection?.turn === view.turnVersion && ready ? selection.card : null;
   const yourTurn = active && turn === seat;
-  const canAct = ready && fourOnline && yourTurn;
+  const canAct = ready && seatsReady && yourTurn;
   const position = (index) => seatPosition(index, seat);
   const trickNumber = seats.reduce((count, player) => count + (player?.wins ?? 0), 0);
   const offset = serverOffset ?? view.serverOffset ?? 0;
@@ -232,12 +234,12 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
     return () => clearTimeout(timer);
   }, [offset, revealUntil, revealing]);
   const prompt = active
-    ? !fourOnline ? "Player offline. Waiting for reconnect."
+    ? !seatsReady ? "A player left. Waiting for their seat to be restored."
       : yourTurn ? (phase === "bidding" ? "Your turn to bid" : "Your turn to play")
         : `${seats[turn]?.name} to ${phase === "bidding" ? "bid" : "play"}`
     : revealing ? "Final trick" : phase === "side-result" ? "Side game complete" : phase === "between" ? "Deal complete" : "Game complete";
   const next = view.host && (
-    <button disabled={!ready || !fourOnline || Boolean(snapshot?.summary.pendingTie?.length)}
+    <button disabled={!ready || !seatsReady || Boolean(snapshot?.summary.pendingTie?.length)}
       onClick={() => command(phase === "finished" ? "rematch" : "next")}>
       {phase === "finished" ? "Play again" : phase === "side-result" ? "Resume regular deal" : "Deal next round"}
     </button>
@@ -283,10 +285,15 @@ export default function MatchTable({ view, ready, command, serverOffset }) {
           <section className="match-hand" aria-label="Your hand">
             <div className="match-hand-heading"><h2>Your hand</h2>
               <span>{hand.length} cards{yourTurn && phase === "playing" ? ` · ${legal.length} playable` : ""}</span></div>
+            {canAct && phase === "playing" && <p className="hand-hint">{selectedCard ? "Tap the selected card again to play" : "Tap a card to select it"}</p>}
             <div className={`match-cards${yourTurn && phase === "playing" && legal.length ? " match-cards-selecting" : ""}`}>
               {hand.map((card, index) => (
                 <PlayingCard key={card} card={card} playable={canAct && legal.includes(card)}
-                  highlighted={legal.includes(card)} table={felt}
+                  highlighted={legal.includes(card)} table={felt} selected={canAct && selectedCard === card}
+                  onSelect={() => {
+                    if (selectedCard === card) command("play", { value: card });
+                    else setSelection({ turn: view.turnVersion, card });
+                  }}
                   style={{ "--tilt": `${(index - (hand.length - 1) / 2) * 0.9}deg`,
                     "--entry": `${index * 13}ms` }}
                   onPlay={() => command("play", { value: card })} />

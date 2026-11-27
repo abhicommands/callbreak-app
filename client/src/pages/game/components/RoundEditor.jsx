@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { sideGamePayout } from "../../../../../server/src/services/gameService.js";
 import RoundCard from "./RoundCard.jsx";
 
 export default function RoundEditor({
@@ -75,6 +76,7 @@ export default function RoundEditor({
       isEditingBids={!game.highBid && (defaultBids || Boolean(bids))}
       isEditingActuals={defaultActuals || Boolean(actuals)}
       autoAwardEnabled={game.settings.autoAwardEnabled}
+      pool={highBid?.bid ? sideGamePayout(game.settlementConfig, highBid.bid).total : null}
       highBid={highBid}
       bidLocked={Boolean(game.highBid)}
       selectedBidder={selectedBidder}

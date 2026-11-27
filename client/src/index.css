@@ -81,7 +81,7 @@ td {
   }
 
   .ledger-sidebar {
-    grid-row: 1;
+    grid-row: auto;
   }
 
   input, select {

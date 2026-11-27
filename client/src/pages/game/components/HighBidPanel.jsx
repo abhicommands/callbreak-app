@@ -3,6 +3,7 @@ import { Card, inputStyle, btnStyle, lightBtnStyle } from "./ui.js";
 
 export default function HighBidPanel({
   round,
+  pool,
   bidderIds = [],
   players = [],
   isAdmin,
@@ -54,6 +55,7 @@ export default function HighBidPanel({
           ))}
         </select>
 
+        {pool != null ? <strong>Side payout · {pool} total</strong> : <>
         <label style={{ marginLeft: 8 }}>Stake / loser</label>
         <input
           inputMode="decimal"
@@ -62,7 +64,7 @@ export default function HighBidPanel({
           style={{ ...inputStyle, width: 120 }}
           disabled={!isAdmin || saving}
           placeholder="3"
-        />
+        /></>}
         <button
           style={lightBtnStyle}
           disabled={!isAdmin || saving}
@@ -99,8 +101,8 @@ export default function HighBidPanel({
           </button>
         </div>
         <div style={{ marginTop: 6, color: "#92400e", fontSize: 12 }}>
-          If the bidder wins: bidder +3×stake; every opponent −stake.
-          If the bidder loses: bidder −{opponentCount}×stake; every opponent +stake.
+          {pool == null ? `Each opponent pays or receives the stake. The bidder settles with ${opponentCount} opponents.` :
+            "The three opponents split the payout equally."}
         </div>
         {error && (
           <div style={{ marginTop: 8, color: "crimson", fontSize: 13 }}>

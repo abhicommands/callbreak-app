@@ -59,7 +59,7 @@ export default function LedgerAccess({ seriesId, revision, editorKey, expiresAt,
 
   const exportLedger = () => run(async () => {
     const backup = await request(`${ledgerPath(seriesId)}/export`, { token: editorKey });
-    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `callbreak-${seriesId}.json`;
@@ -80,8 +80,8 @@ export default function LedgerAccess({ seriesId, revision, editorKey, expiresAt,
       </div>
       {editorKey && (
         <p>{expiresAt
-          ? `Expires ${new Date(expiresAt).toLocaleString()} unless you save another edit. Export a backup to keep this ledger.`
-          : "Your next saved edit starts the 24-hour inactivity timer. Export a backup to keep this ledger."}</p>
+          ? `Expires ${new Date(expiresAt).toLocaleString()} if paid up and inactive. Unpaid balances are retained.`
+          : "Outstanding balances are retained."}</p>
       )}
       {editorKey && recoveryCode && (
         <div className="ledger-recovery">

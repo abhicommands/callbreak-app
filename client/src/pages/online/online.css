@@ -365,3 +365,18 @@
 }
 @keyframes reveal-face { to { opacity: 1; } }
 @keyframes fade-final { 0%, 88% { opacity: 1; } 100% { opacity: 0; } }
+
+.hand-hint { margin: 0 0 12px; color: #e5d0aa; font-size: .85rem; }
+.match-cards .playing-card[aria-pressed="true"] {
+  z-index: 4; outline: 3px solid #b4781a; outline-offset: 2px;
+  translate: 0 -8px; box-shadow: 0 7px 14px #192a4440;
+}
+
+@media (max-width: 600px) {
+  .online-in-game .online-header { display:grid; grid-template-columns:1fr auto auto; gap:0 16px; }
+  .online-in-game .online-header h1 { grid-column:1 / -1; grid-row:1; text-align:left; }
+  .match-hand { padding:10px 12px 15px; background:#142237; border-top:1px solid #40516b; }
+  .match-cards { gap:6px 4px; }
+  .match-hand-heading { margin-bottom:12px; }
+  .match-hand .hand-hint { margin:0 0 15px; }
+}

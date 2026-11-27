@@ -11,7 +11,7 @@ import {
   asObject, bearer, credential, digest, eventFromExport, failure, json, matches, payloadFor, readJson,
   type Event, type Payload,
 } from "./protocol";
-import { OnlineTable, TABLE_ROUTE } from "./onlineTable";
+import { OnlineTable, TABLE_KEY, TABLE_ROUTE } from "./onlineTable";
 
 interface Env {
   LEDGER: DurableObjectNamespace<Ledger>;
@@ -20,16 +20,15 @@ interface Env {
 
 type Game = ReturnType<typeof createGame>;
 type LedgerRow = { revision: number; editor: string; recovery: string; game: string };
-type GameMetadata = { gameId: string; gameIndex: number; createdAt: number; settlementApplied: boolean };
 type AuditRow = { revision: number; action: string; payload: string; at: number };
 type Receipt = { revision: number; fingerprint: string };
 
-const ROUTE = /^\/api\/ledger\/([a-f0-9]{32})(?:\/(snapshot|socket|command|setup|editor|recover|export|history)(?:\/([1-9][0-9]*))?)?$/;
+const ROUTE = /^\/api\/ledger\/([a-f0-9]{32})(?:\/(snapshot|socket|command|setup|editor|recover|export|history|visit)(?:\/([1-9][0-9]*))?)?$/;
 const FORMAT = "callbreak-ledger";
 const VERSION = 1;
 const MAX_EVENTS = 5_000;
 const BACKUP_BYTES = 4 * 1024 * 1024;
-const IDLE_SECONDS = 24 * 60 * 60;
+const IDLE_SECONDS = 7 * 24 * 60 * 60;
 const EXPIRY_KEY = "expiresAt";
 const EXPIRED_MESSAGE = "This ledger expired. Restore a backup from the home page to continue.";
 
@@ -117,13 +116,27 @@ export class Ledger extends DurableObject<Env> {
     assert(Number.isSafeInteger(idleSeconds) && idleSeconds > 0 && idleSeconds <= IDLE_SECONDS,
       500, "Invalid ledger expiration configuration.");
     const expiresAt = at + idleSeconds * 1000;
+    this.ctx.storage.kv.put("retentionVersion", 2);
     this.ctx.storage.kv.put(EXPIRY_KEY, expiresAt);
     // The first alarm is committed with the saved state. Later saves only move the deadline.
     if (current === null) await txn.setAlarm(expiresAt);
     return expiresAt;
   }
 
+  private extendLegacyDeadline() {
+    const previous = this.expiresAt();
+    if (previous && !this.env.LEDGER_IDLE_SECONDS && !this.ctx.storage.kv.get("retentionVersion")) {
+      this.ctx.storage.kv.put(EXPIRY_KEY, previous + 6 * 86_400_000);
+      this.ctx.storage.kv.put("retentionVersion", 2);
+    }
+  }
+
   async alarm() {
+    return this.ctx.blockConcurrencyWhile(() => this.handleAlarm());
+  }
+
+  private async handleAlarm() {
+    this.extendLegacyDeadline();
     const expiresAt = this.expiresAt();
     if (expiresAt === null) return;
     if (expiresAt > Date.now()) {
@@ -132,6 +145,28 @@ export class Ledger extends DurableObject<Env> {
       return;
     }
 
+    const kept = await this.ctx.storage.transaction(async (txn) => {
+      const deadline = this.expiresAt();
+      if (deadline === null || deadline > Date.now()) return true;
+      const row = this.findLedger();
+      if (row && Object.values(parseGame(row.game).balanceUnits).some(Boolean)) {
+        const game = parseGame(row.game);
+        if (!game.settlementApplied && !("closedAt" in game) && !("settlementSkipped" in game) && !getSummary(game).pendingTie.length) {
+          this.writeOnlineLedger(game.seriesId, "close-group-game", {}, Date.now());
+        }
+        this.table.closeForGroup();
+        this.ctx.storage.kv.delete(EXPIRY_KEY);
+        await txn.deleteAlarm();
+        return true;
+      }
+      return false;
+    });
+    if (kept) {
+      this.table.notify();
+      const row = this.findLedger();
+      if (row) this.broadcast(snapshot(parseGame(row.game), row.revision, this.expiresAt(), Boolean(this.table.room)));
+      return;
+    }
     const sockets = this.ctx.getWebSockets();
     await this.ctx.storage.deleteAll();
     for (const socket of sockets) {
@@ -143,7 +178,16 @@ export class Ledger extends DurableObject<Env> {
     }
   }
 
-  private recordEvent(event: Event) {
+  private recordEvent(event: Event, restoring = false) {
+    const used = this.ctx.storage.kv.get<number>("exportBytes") ?? this.sql.exec<{bytes: number}>(
+      "SELECT coalesce(sum(length(cast(json_object('revision',revision,'action',action,'payload',json(payload),'at',at) as blob))+1),0) AS bytes FROM audit"
+    ).one().bytes;
+    const bytes = used + new TextEncoder().encode(JSON.stringify(event)).length + 1;
+    const closing = ["mark-paid", "finish-group-game", "close-group-game"].includes(event.action);
+    const reserve = closing || restoring ? 0 : 3;
+    assert(event.revision <= MAX_EVENTS - reserve && (restoring || bytes <= BACKUP_BYTES - 512 - reserve * 128),
+      409, "This group has reached its history limit. Export its ledger before starting a new group.");
+    this.ctx.storage.kv.put("exportBytes", bytes);
     this.sql.exec("INSERT INTO audit VALUES (?, ?, ?, ?)", event.revision, event.action,
       JSON.stringify(event.payload), event.at);
   }
@@ -191,7 +235,7 @@ export class Ledger extends DurableObject<Env> {
     if (this.table.ownsSocket(socket)) return this.table.socketClosed(socket);
   }
 
-  private history(gameId?: string) {
+  private history(gameId?: string, before?: number) {
     const active = parseGame(this.requireLedger().game);
     if (gameId) {
       if (active.gameId === gameId) return json(historyFor(active));
@@ -199,22 +243,28 @@ export class Ledger extends DurableObject<Env> {
       if (!entry) return json({ error: "Settled game not found." }, 404);
       return json(historyFor(parseGame(entry.game)));
     }
-    const archives = this.sql.exec<{ game_index: number; created_at: number }>(
-      "SELECT game_index, created_at FROM history ORDER BY game_index",
-    );
-    const games: GameMetadata[] = Array.from(archives, ({ game_index, created_at }) => ({
-      gameId: String(game_index), gameIndex: game_index, createdAt: created_at, settlementApplied: true,
-    }));
-    const { gameIndex, createdAt, settlementApplied } = active;
-    games.push({ gameId: active.gameId, gameIndex, createdAt,
-      settlementApplied: settlementApplied || ("settlementSkipped" in active && active.settlementSkipped === true) });
-    return json({ currentGameId: active.gameId, games });
+    const limit = before === undefined ? MAX_EVENTS : 25;
+    const rows = this.sql.exec<{ game_index: number; created_at: number; status: string }>(
+      `SELECT game_index, created_at, CASE WHEN json_extract(game,'$.settlementApplied') THEN 'Posted'
+        WHEN json_extract(game,'$.settlementSkipped') THEN 'Payout skipped' ELSE 'Ended' END AS status
+        FROM history WHERE game_index < ? ORDER BY game_index DESC LIMIT ?`, before ?? Number.MAX_SAFE_INTEGER, limit + 1,
+    ).toArray();
+    const entries = rows.slice(0, limit);
+    const games = entries.map(({ game_index, created_at, status }) => ({
+      gameId: String(game_index), gameIndex: game_index, createdAt: created_at, status, settlementApplied: status === "Posted",
+    })).reverse();
+    const status = active.settlementApplied ? "Posted" : "settlementSkipped" in active && active.settlementSkipped ?
+      "Payout skipped" : "closedAt" in active ? "Ended" : getSummary(active).pendingTie.length ? "Awaiting tie decision" : "In progress";
+    if (before === undefined || active.gameIndex < before) games.push({ gameId: active.gameId, gameIndex: active.gameIndex,
+      createdAt: active.createdAt, settlementApplied: active.settlementApplied, status });
+    return json({ currentGameId: active.gameId, games, nextBefore: rows.length > limit ? entries.at(-1)?.game_index : null });
   }
 
   private async editorRead(request: Request, route: string) {
     const verifier = await digest(bearer(request));
-    assert(!this.table.room && matches(verifier, this.requireLedger().editor), 403, "A valid editor credential is required.");
-    if (route === "editor") return json({ authorized: true });
+    const row = this.requireLedger();
+    assert(matches(verifier, this.table.room?.host ?? row.editor), 403, "A valid editor credential is required.");
+    if (route === "editor") return json({ authorized: true, hostId: Object.entries(this.table.memberTokens()).find(([, code]) => code === verifier)?.[0] });
     return this.backup();
   }
 
@@ -286,12 +336,14 @@ export class Ledger extends DurableObject<Env> {
     if (replacement) assert(!matches(verifier, replacement), 400, "Use separate editor and recovery credentials.");
 
     const result = await this.ctx.storage.transaction(async (txn) => {
-      assert(!this.table.room, 409, "This ledger is updated by the online table.");
+      const room = this.table.room;
+      if (room) assert(route === "command" && ["group-next", "mark-paid"].includes(String(action)), 409,
+        "This ledger is updated by the online table.");
       const row = this.findLedger();
       const currentExpiry = row ? this.expiresAt() : null;
       if (row) {
         this.requireActive(currentExpiry);
-        assert(matches(verifier, route === "recover" ? row.recovery : row.editor), 403, "Invalid credential.");
+        assert(matches(verifier, route === "recover" ? row.recovery : room?.host ?? row.editor), 403, "Invalid credential.");
         const [receipt] = this.sql.exec<Receipt>("SELECT revision, fingerprint FROM receipt WHERE command_key = ?", key);
         if (receipt) {
           assert(matches(fingerprint, receipt.fingerprint), 409, "Idempotency key already used for a different request.");
@@ -319,7 +371,7 @@ export class Ledger extends DurableObject<Env> {
           game = restored.active;
           revision = restored.events.length;
           for (const archived of restored.archives) this.archive(archived);
-          for (const event of restored.events) this.recordEvent(event);
+          for (const event of restored.events) this.recordEvent(event, true);
         } else {
           assert(action === "create", 400, "Choose create or restore.");
           const fields = payloadFor("create", payload);
@@ -333,18 +385,42 @@ export class Ledger extends DurableObject<Env> {
         const active = parseGame(row.game);
         if (route === "recover") {
           game = active;
+          this.table.replaceMemberToken(row.editor, replacement!);
           this.recordEvent({ revision, action: "recover", payload: {}, at });
           this.sql.exec("UPDATE ledger SET editor = ?, revision = ? WHERE id = 1", replacement!, revision);
         } else {
           if (typeof action !== "string") throw new HttpError(400, "Provide a ledger command.");
           assert(!["record-online-round", "record-online-bids", "record-online-highbid", "abandon-online-round", "next-online-game",
-            "start-online-side", "score-online-side", "close-online-side"]
+            "start-online-side", "score-online-side", "close-online-side", "seat-online-game", "close-group-game"]
             .includes(action), 409, "Online games are recorded by the table.");
           if (action === "resolve-game") {
             assert(!getSummary(active).pendingTie.length, 409, "Choose a winner or split the tie in the ledger.");
           }
           const fields = payloadFor(action, payload);
+          if (action === "finish-group-game") {
+            assert(!room && !active.settlementApplied && !("closedAt" in active), 409, "This game is already finished.");
+          }
+          if (action === "group-next" && room) {
+            assert(room.phase === "ended" || room.phase === "finished", 409, "Finish or end the table first.");
+            if (room.phase === "ended" && !active.settlementApplied && !("settlementSkipped" in active) && !("closedAt" in active)) {
+              applyCommand(active, "close-group-game", {}, at);
+              this.recordEvent({ revision, action: "close-group-game", payload: {}, at });
+              revision++;
+            }
+            this.table.remember(room);
+          }
           game = applyCommand(active, action, fields, at);
+          if (action === "group-next") {
+            const host = room?.host ?? row.editor;
+            const recovery = room?.recovery ?? row.recovery;
+            this.sql.exec("UPDATE ledger SET editor = ?, recovery = ? WHERE id = 1", host, recovery);
+            if (fields.mode === "online") {
+              assert(game.players.some((p: {id: string}) => p.id === fields.hostId), 400, "Choose your seat.");
+              const highestId = Math.max(...Object.keys(game.balanceUnits).map(Number), ...Object.keys(this.table.memberTokens()).map(Number));
+              this.table.prepareGroup(seriesId, game.gameIndex, game.name, game.players, String(fields.hostId),
+                host, recovery, fields.settings, highestId + 1);
+            } else this.ctx.storage.kv.delete(TABLE_KEY);
+          }
           if (game !== active) this.archive(active);
           this.recordEvent({ revision, action, payload: fields, at });
           this.sql.exec("UPDATE ledger SET revision = ?, game = ? WHERE id = 1", revision, JSON.stringify(game));
@@ -352,15 +428,29 @@ export class Ledger extends DurableObject<Env> {
       }
       this.sql.exec("INSERT INTO receipt VALUES (?, ?, ?)", key, revision, fingerprint);
       const expiresAt = await this.refreshExpiry(txn, at, currentExpiry);
-      return { view: snapshot(game, revision, expiresAt), committedRevision: revision, replayed: false };
+      return { view: snapshot(game, revision, expiresAt, Boolean(this.table.room)), committedRevision: revision, replayed: false };
     });
 
-    if (!result.replayed) this.broadcast(result.view);
+    if (!result.replayed) {
+      this.broadcast(result.view);
+      if (this.table.room) this.table.notify();
+      else if (action === "group-next") {
+        for (const socket of this.ctx.getWebSockets("online-table")) socket.close(1000, "In-person game started");
+      }
+    }
     return json(result, route === "setup" && !result.replayed ? 201 : 200);
   }
 
   async fetch(request: Request): Promise<Response> {
     try {
+      this.extendLegacyDeadline();
+      const deadline = this.expiresAt();
+      if (deadline !== null && deadline <= Date.now()) {
+        const row = this.findLedger();
+        if (row && Object.values(parseGame(row.game).balanceUnits).some(Boolean)) {
+          await this.ctx.blockConcurrencyWhile(() => this.handleAlarm());
+        }
+      }
       const { pathname } = new URL(request.url);
       const table = pathname.match(TABLE_ROUTE);
       if (table) return await this.table.fetch(request, table[1], table[2]);
@@ -368,9 +458,32 @@ export class Ledger extends DurableObject<Env> {
       if (!match) return json({ error: "Route not found." }, 404);
       const [, seriesId, route = "snapshot", gameId] = match;
       if (gameId && route !== "history") return json({ error: "Route not found." }, 404);
+      if (route === "visit" && request.method === "POST") {
+        const token = await digest(bearer(request));
+        const room = this.table.room;
+        const row = this.findLedger();
+        const member = matches(token, room?.host ?? row?.editor ?? "") ||
+          (room && room.phase !== "ended" && room.seats.some((p) => p?.token === token)) ||
+          Object.values(this.table.memberTokens()).includes(token);
+        assert(member, 403, "Open with a member or editor credential.");
+        await this.ctx.storage.transaction(async (txn) => {
+          const at = Date.now();
+          const deadline = this.expiresAt();
+          this.requireActive(deadline);
+          if (!deadline || at - (this.ctx.storage.kv.get<number>("lastVisit") ?? 0) > 3_600_000) {
+            this.ctx.storage.kv.put("lastVisit", at);
+            await this.refreshExpiry(txn, at, deadline);
+          }
+        });
+        return json({ expiresAt: this.expiresAt() });
+      }
       if (request.method === "GET") {
         if (route === "socket") return this.openSocket(request);
-        if (route === "history") return this.history(gameId);
+        if (route === "history") {
+          const before = new URL(request.url).searchParams.get("before");
+          if (before !== null) assert(Number.isSafeInteger(Number(before)) && Number(before) > 0, 400, "Invalid history page.");
+          return this.history(gameId, before === null ? undefined : Number(before));
+        }
         if (route === "editor" || route === "export") return await this.editorRead(request, route);
         if (route === "snapshot") {
           const row = this.requireLedger();

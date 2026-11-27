@@ -98,12 +98,12 @@ function OnlineHistory({ game }) {
 export function OnlineLedger({ game, summary, connected, onlineTable, children }) {
   return (
     <main className="online-page">
-      <header className="online-header"><Link to="/">Home</Link>
+      <header className="online-header"><Link to={`/group/${game.seriesId}`}>Group balances &amp; games</Link>
         {onlineTable && <Link to={`/play/${game.seriesId}`}>Online table</Link>}
       </header>
       <h1>Online Callbreak Ledger</h1>
       <p role="status">Live sync: {connected ? "Online" : "Reconnecting"}</p>
-      <p>{onlineTable ? "Online ledgers expire after 24 hours of table inactivity." : "This backup expires after 24 hours."}</p>
+      <p>Paid-up groups expire after seven inactive days. Outstanding balances are retained.</p>
       <OnlineScores game={game} summary={summary} heading={`Game ${game.gameIndex} · ${game.name}`} />
       <OnlineHistory game={game} />
       {children}

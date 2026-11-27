@@ -80,6 +80,7 @@ test("pregame bench substitutions retain the replaced seat's rotation and balanc
   const game = create({ startDealerIndex: 2 });
   assert.deepEqual(Object.values(game.roundInfo).map((info) => info.dealerId), ["3", "4", "1", "2", "3"]);
   game.balanceUnits[3] = -150_000;
+  game.balanceUnits[1] = 150_000;
   run(game, "substitute", { outgoingPlayerId: "3", incomingName: "E" });
   assert.equal(game.roundInfo[1].dealerId, "5");
   assert.equal(game.inactivePlayers[0].id, "3");

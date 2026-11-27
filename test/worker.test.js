@@ -196,7 +196,7 @@ test("the Worker authorizes, commits, broadcasts, restores, and survives a resta
   assert.equal((await request("snapshot", { seriesId: restoredId })).status, 404);
   restore.payload = backup;
   assert.equal((await request("setup", { token: restoredKey, seriesId: restoredId, body: restore })).status, 201);
-  assert.deepEqual((await request("history/1", { seriesId: restoredId })).data, settledHistory);
+  assert.deepEqual((await request("history/1", { seriesId: restoredId })).data, { ...settledHistory, ledger: { ...settledHistory.ledger, game: { ...settledHistory.ledger.game, seriesId: restoredId } } });
   assert.deepEqual((await request("export", { token: restoredKey, seriesId: restoredId })).data, backup);
 
   await worker.stop();
@@ -265,6 +265,20 @@ test("inactivity alarms delete the ledger and a backup restores it with a fresh 
   const backup = await (await request(edited, "export", { editor: true })).json();
   assert.equal((await (await request(edited, "snapshot")).json()).expiresAt, view.expiresAt);
 
+  const unpaid = newLedger("create", { ...config, rulesVersion: 2, autoAwardEnabled: false });
+  let unpaidView = await setup(unpaid);
+  async function changeUnpaid(action, payload) {
+    const response = await request(unpaid, "command", { editor: true,
+      body: { expectedRevision: unpaidView.revision, action, payload } });
+    assert.equal(response.status, 200);
+    unpaidView = (await response.json()).view;
+  }
+  await changeUnpaid("set-bids", { round: 1, bids: seats(10, 1, 1, 1) });
+  await changeUnpaid("resolve-highbid", { round: 1, bidderId: "1", bidderWon: true });
+  const balances = unpaidView.summary.payouts;
+  assert.equal(balances[1], 12);
+  assert.equal((await request(unpaid, "visit", { body: {} })).status, 403);
+
   // Check the logical deadlines separately from the runtime's alarm delivery.
   await wait(Math.max(idleView.expiresAt, firstView.expiresAt) - Date.now() + 50);
   assert.ok([404, 410].includes((await request(idle, "snapshot")).status));
@@ -275,6 +289,15 @@ test("inactivity alarms delete the ledger and a backup restores it with a fresh 
   assert.equal((await request(idle, "snapshot")).status, 404);
   assert.equal((await request(edited, "snapshot")).status, 404);
   assert.equal((await request(edited, "export", { editor: true })).status, 404);
+
+  unpaidView = await (await request(unpaid, "snapshot")).json();
+  assert.equal(unpaidView.expiresAt, null);
+  assert.ok(unpaidView.game.closedAt);
+  assert.deepEqual(unpaidView.summary.payouts, balances);
+  await changeUnpaid("mark-paid", {});
+  assert.equal(unpaidView.summary.payouts[1], 0);
+  assert.equal(unpaidView.game.payments.length, 1);
+  assert.ok(unpaidView.expiresAt > Date.now());
 
   const restoredLedger = newLedger("restore", backup);
   const restored = await setup(restoredLedger);
