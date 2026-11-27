@@ -121,7 +121,7 @@ export default function GameHistory({
                 </h4>
                 {(history.roundEvents?.[round] || []).filter((event) => event.type === "HIGH_BID_RESOLVED").map((event, index) => (
                   <p key={index}>
-                    Side game: {names[event.bidderId] || history.benchNames?.[event.bidderId]} {event.outcome === "WIN" ? "won" : "lost"} at {event.stake} per opponent.
+                    {names[event.bidderId] || history.benchNames?.[event.bidderId]} {event.outcome === "WIN" ? "won" : "lost"} {event.total == null ? `at ${event.stake} per opponent` : `${event.total} on a call of ${event.bid}`}.
                   </p>
                 ))}
                 <table style={tableStyle}>

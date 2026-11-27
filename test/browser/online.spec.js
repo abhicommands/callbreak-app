@@ -3,7 +3,7 @@ import { devices, expect, test } from "@playwright/test";
 import { localWorker } from "../local-worker.js";
 
 test("four mobile browsers see the same table, reconnect, tap or drag cards, and see scores", async ({ browser }) => {
-  test.setTimeout(75_000);
+  test.setTimeout(120_000);
   const worker = await localWorker();
   const phone = devices[browser.browserType().name() === "webkit" ? "iPhone SE" : "Pixel 7"];
   const contexts = [];
@@ -101,8 +101,8 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     expect(await Promise.all(pages.map(labels))).toEqual(original);
 
     await third.close();
-    await expect(first.getByText("Player offline. Waiting for reconnect.")).toBeVisible();
-    await expect(table(first).locator(".turn-clock")).toHaveAttribute("aria-label", /paused$/);
+    await expect(table(first).locator(".match-seat-offline")).toBeVisible();
+    await expect(table(first).locator(".turn-clock")).toHaveAttribute("aria-label", /left$/);
     const reconnected = await contexts[3].newPage();
     pages[3] = reconnected;
     await reconnected.goto(invite);
@@ -110,9 +110,9 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     expect(await labels(reconnected)).toEqual(original[3]);
     await expect(table(reconnected).locator('[data-seat="south"]')).toContainText("You");
     await contexts[3].setOffline(true);
-    await expect(first.getByText("Player offline. Waiting for reconnect.")).toBeVisible();
+    await expect(table(first).locator(".match-seat-offline")).toBeVisible();
     await contexts[3].setOffline(false);
-    await expect(first.getByText("Player offline. Waiting for reconnect.")).toHaveCount(0, { timeout: 10_000 });
+    await expect(table(first).locator(".match-seat-offline")).toHaveCount(0, { timeout: 10_000 });
 
     for (const value of [3, 2, 2, 2]) await bid(value);
     const lead = await actingPlayer("Your turn to play");
@@ -127,6 +127,14 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     await expect(hand(lead).locator(".playing-card-legal")).toHaveCount(13);
     const cardSize = await playable(lead).boundingBox();
     expect(Math.min(cardSize.width, cardSize.height)).toBeGreaterThanOrEqual(44);
+    await playable(lead).tap();
+    await expect(playable(lead)).toHaveAttribute("aria-pressed", "true");
+    await expect(cards(lead)).toHaveCount(13);
+    const secondCard = hand(lead).locator("button.playing-card:enabled").nth(1);
+    await secondCard.tap();
+    await expect(secondCard).toHaveAttribute("aria-pressed", "true");
+    await expect(playable(lead)).toHaveAttribute("aria-pressed", "false");
+    await playable(lead).tap();
     await playable(lead).tap();
     await expect(hand(lead).getByText("12 cards")).toBeVisible();
 
@@ -147,6 +155,7 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
       const player = await actingPlayer("Your turn to play");
       sawRestrictedHand ||= await hand(player).locator("button.playing-card:disabled").count() > 0;
       const before = await cards(player).count();
+      await playable(player).tap();
       await playable(player).tap();
       await expect(cards(player)).toHaveCount(index === 47 ? 0 : before - 1);
       if (index === 3) {

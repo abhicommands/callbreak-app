@@ -3,29 +3,29 @@ import {
   DEFAULT_MINIMUM_BID, PACE_OPTIONS, PAYOUT_OPTIONS,
 } from "../../../../server/src/services/tableSettings.js";
 
-export function SettingsFields({ settings = {} }) {
+export function SettingsFields({ settings = {}, online = true }) {
   const [bidSeconds, setBid] = useState(settings.bidSeconds ?? PACE_OPTIONS.Standard.bidSeconds);
   const [playSeconds, setPlay] = useState(settings.playSeconds ?? PACE_OPTIONS.Standard.playSeconds);
   const [weights, setWeights] = useState(settings.weights ?? PAYOUT_OPTIONS[0]);
   return (
     <>
       <fieldset className="table-settings">
-        <legend>Game pace</legend>
-        <div className="setting-presets">
+        <legend>{online ? "Game pace" : "Bidding"}</legend>
+        {online && <div className="setting-presets">
           {Object.entries(PACE_OPTIONS).map(([label, pace]) => (
             <button key={label} type="button" aria-pressed={Number(bidSeconds) === pace.bidSeconds && Number(playSeconds) === pace.playSeconds}
               onClick={() => { setBid(pace.bidSeconds); setPlay(pace.playSeconds); }}>{label}</button>
           ))}
-        </div>
+        </div>}
         <div className="setting-fields">
-          <label>Seconds to bid<input name="bidSeconds" type="number" inputMode="numeric"
+          {online && <><label>Seconds to bid<input name="bidSeconds" type="number" inputMode="numeric"
             value={bidSeconds} onChange={(event) => setBid(event.target.value)} required min={0} max={120} /></label>
           <label>Seconds to play<input name="playSeconds" type="number" inputMode="numeric"
-            value={playSeconds} onChange={(event) => setPlay(event.target.value)} required min={0} max={120} /></label>
+            value={playSeconds} onChange={(event) => setPlay(event.target.value)} required min={0} max={120} /></label></>}
           <label>Minimum total bid<input name="minimumBid" type="number" inputMode="numeric"
             defaultValue={settings.minimumBid ?? DEFAULT_MINIMUM_BID} min={4} max={13} required /></label>
         </div>
-        <p className="online-muted">Use 0 for an untimed turn. On timeout, the table makes a legal move.</p>
+        {online && <p className="online-muted">Use 0 for an untimed turn. On timeout, the table makes a legal move.</p>}
       </fieldset>
       <fieldset className="table-settings">
         <legend>Ledger payouts</legend>

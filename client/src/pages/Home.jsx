@@ -13,7 +13,7 @@ export default function Home() {
   ]);
   const [weights, setWeights] = useState(["1", "2", "3"]); // strings for easy typing
   const [startDealerIndex, setStartDealerIndex] = useState(0);
-  const [autoAwardEnabled, setAutoAwardEnabled] = useState(true);
+  const [autoAwardEnabled, setAutoAwardEnabled] = useState(false);
   const [openId, setOpenId] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -63,6 +63,7 @@ export default function Home() {
 
       await submit({
         name,
+        rulesVersion: 2,
         players,
         weights: parsedWeights,
         startDealerIndex,
@@ -91,8 +92,8 @@ export default function Home() {
 
   function openLedger(event) {
     event.preventDefault();
-    const id = openId.trim().toLowerCase().match(/(?:^|\/ledger\/)([a-f0-9]{32})\/?$/)?.[1];
-    if (id) navigate(`/ledger/${id}`);
+    const match = openId.trim().toLowerCase().match(/(?:^|\/(ledger|group)\/)([a-f0-9]{32})\/?$/);
+    if (match) navigate("/" + (match[1] ?? "ledger") + "/" + match[2]);
     else setErr("Enter a ledger link or series ID.");
   }
 
@@ -103,7 +104,7 @@ export default function Home() {
 
       <section style={card}>
         <h2>Create Ledger</h2>
-        <p>Ledgers expire after 24 hours without a saved editor change. Export a backup to keep your games and balances.</p>
+        <p>Use the same group link for future games. Paid-up groups expire after seven inactive days.</p>
 
         <label htmlFor="series-name" style={label}>Ledger name</label>
         <input

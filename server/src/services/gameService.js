@@ -13,7 +13,7 @@ import {
   transfer,
   validAmount,
 } from "../utils/gameLogic.js";
-import { DEFAULT_MINIMUM_BID, validMinimumBid } from "./tableSettings.js";
+import { DEFAULT_MINIMUM_BID, tableSettings, validMinimumBid } from "./tableSettings.js";
 
 export function isRecord(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -62,6 +62,7 @@ function requireName(value) {
 function newGame(seriesId, gameIndex, source, dealerId, at) {
   const game = {
     seriesId,
+    ...(source.rulesVersion === 2 && { rulesVersion: 2, minimumBid: source.minimumBid, pace: source.pace }),
     gameIndex,
     gameId: String(gameIndex),
     name: source.name,
@@ -96,6 +97,12 @@ export function createGame(seriesId, input, at) {
   assert(mode === undefined || mode === "online", 400, "Invalid ledger mode.");
   assert(validMinimumBid(minimumBid), 400, "Invalid minimum bid.");
 
+  let pace;
+  if (input.pace !== undefined) {
+    assert(isRecord(input.pace), 400, "Invalid game pace.");
+    const { bidSeconds, playSeconds } = tableSettings(input.pace);
+    pace = { bidSeconds, playSeconds };
+  }
   const roster = players.map((player, index) => ({ id: String(index + 1), name: requireName(player) }));
   return newGame(seriesId, 1, {
     name: requireName(name),
@@ -105,6 +112,8 @@ export function createGame(seriesId, input, at) {
     settings: { autoAwardEnabled },
     balanceUnits: Object.fromEntries(roster.map(({ id }) => [id, 0])),
     mode,
+    rulesVersion: input.rulesVersion,
+    pace,
     minimumBid,
   }, roster[startDealerIndex].id, at);
 }
@@ -238,10 +247,17 @@ function setBids(game, { round, bids }, at) {
   const bidderIds = game.players.filter(({ id }) => bids[id] >= HIGH_BID_MINIMUM).map(({ id }) => id);
 
   // A saved 8+ call replaces the regular entry and opens a side game.
+  if (game.rulesVersion === 2 && !game.settings.autoAwardEnabled) {
+    assert(Object.values(bids).reduce((sum, bid) => sum + bid, 0) >= game.minimumBid,
+      400, `Bids must total at least ${game.minimumBid}. Bid again with the same cards.`);
+  }
   if (bidderIds.length) {
     delete game.roundData[round];
     delete game.roundHistory[round];
-    game.highBid = { active: true, round, bidderIds };
+    const caller = highestBidder(game.roundInfo[round].bidderOrder, (id) => bids[id]);
+    game.highBid = game.rulesVersion === 2
+      ? { active: true, round, bidderIds: [caller], bid: bids[caller] }
+      : { active: true, round, bidderIds };
     pushRoundEvent(game, round, { type: "HIGH_BID_TRIGGERED", bids, bidderIds }, at);
   } else if (game.settings.autoAwardEnabled && round < game.rounds &&
     Object.values(bids).reduce((sum, value) => sum + value, 0) < 10) {
@@ -283,7 +299,7 @@ function closeHighBid(game, payload, at, canceled) {
     pushRoundEvent(game, round, { type: "HIGH_BID_CANCELED" }, at);
   } else {
     assert(game.highBid.bidderIds.includes(bidderId), 400, "Select a player who bid 8 or more.");
-    applyHighBidOutcome(game, payload, at);
+    applyHighBidOutcome(game, { ...payload, bid: game.highBid.bid }, at);
   }
   game.highBid = null;
 }
@@ -391,6 +407,46 @@ const actions = {
 
 export function applyCommand(game, action, payload, at) {
   assert(isRecord(payload), 400, "Provide a command payload.");
+  if (action === "seat-online-game") {
+    assert(game.mode === "online" && !Object.keys(game.roundEvents).length, 409, "The game has already started.");
+    const roster = onlineRoster(game, payload.players);
+    assert(roster.players.some(({ id }) => id === payload.dealerId), 400, "Choose a seated dealer.");
+    Object.assign(game, roster);
+    initDealerRotation(game, payload.dealerId);
+    return game;
+  }
+  if (action === "mark-paid") {
+    const transfers = paymentTransfers(game.balanceUnits);
+    assert(transfers.length, 409, "The group is already paid up.");
+    (game.payments ??= []).push({ at, transfers });
+    for (const id of Object.keys(game.balanceUnits)) game.balanceUnits[id] = 0;
+    return game;
+  }
+  if (action === "close-group-game" || action === "finish-group-game") {
+    assert(!pendingSettlementTie(game).length, 409, "Resolve the first-place tie first.");
+    game.closedAt = at;
+    delete game.onlineSide;
+    game.highBid = null;
+    for (const [round, data] of Object.entries(game.roundData)) {
+      if (data.status === "BIDS_SET") {
+        delete game.roundData[round];
+        pushRoundEvent(game, Number(round), { type: "ABANDONED" }, at);
+      }
+    }
+    return game;
+  }
+  if (action === "group-next") {
+    assert(game.settlementApplied || game.settlementSkipped || game.closedAt, 409, "Finish the current game first.");
+    assert(["online", "manual"].includes(payload.mode), 400, "Choose a game mode.");
+    const config = tableSettings(payload.settings);
+    const roster = onlineRoster(game, payload.players);
+    assert(roster.players.some(({ id }) => id === payload.dealerId), 400, "Choose a seated dealer.");
+    return newGame(game.seriesId, game.gameIndex + 1, { ...game, ...roster, rulesVersion: 2,
+      mode: payload.mode, minimumBid: config.minimumBid, settlementConfig: { weights: config.weights, stake: config.stake },
+      pace: { bidSeconds: config.bidSeconds, playSeconds: config.playSeconds },
+      settings: { autoAwardEnabled: false } }, payload.dealerId, at);
+  }
+  assert(!game.closedAt, 409, "This game is closed.");
   if (game.mode === "online") {
     if (action === "next-online-game") {
       assert(game.settlementApplied || game.settlementSkipped, 409, "Finish all five deals first.");
@@ -428,6 +484,25 @@ export function publicGame(game) {
   };
 }
 
+export function paymentTransfers(balances) {
+  const entries = Object.entries(balances);
+  if (entries.reduce((sum, [, amount]) => sum + BigInt(amount), 0n) !== 0n) return [];
+  const owed = entries.filter(([, amount]) => amount > 0);
+  const transfers = [];
+  let creditor = 0;
+  for (const [from, amount] of entries) {
+    let due = -amount;
+    while (due > 0) {
+      const share = Math.min(due, owed[creditor][1]);
+      transfers.push({ from, to: owed[creditor][0], amount: balanceFromUnits(share) });
+      due -= share;
+      owed[creditor][1] -= share;
+      if (!owed[creditor][1]) creditor++;
+    }
+  }
+  return transfers;
+}
+
 export function getSummary(game) {
   const payoutEntries = Object.entries(game.balanceUnits).map(([id, units]) => [id, balanceFromUnits(units)]);
   const highBids = Object.values(game.roundEvents).flat().filter(({ type }) => type === "HIGH_BID_RESOLVED");
@@ -445,6 +520,7 @@ export function getSummary(game) {
     payouts: Object.fromEntries(payoutEntries),
     gamePayouts: Object.fromEntries(Object.entries(gameUnits).map(([id, units]) => [id, balanceFromUnits(units)])),
     highBids,
+    transfersDue: paymentTransfers(game.balanceUnits),
     scoredPlayerIds: [...new Set(Object.values(game.roundData).flatMap(({ bids }) => Object.keys(bids)))],
     pendingTie: pendingSettlementTie(game),
     settlementApplied: game.settlementApplied,
@@ -455,9 +531,9 @@ export function getSummary(game) {
 }
 
 export function historyFor(game) {
-  assert(game.settlementApplied || game.settlementSkipped, 404, "Settled game not found.");
+  assert(game.closedAt || game.settlementApplied || game.settlementSkipped, 404, "Settled game not found.");
   const { gameId, name, players, roundHistory, roundEvents, resolvedAt, lastSettlementResult } = game;
   const benchNames = Object.fromEntries(game.inactivePlayers.map(({ id, name }) => [id, name]));
   return { gameId, name, players, benchNames, roundHistory, roundEvents, resolvedAt, settlement: lastSettlementResult,
-    ...(game.mode === "online" ? { ledger: { game: publicGame(game), summary: getSummary(game) } } : {}) };
+    ledger: { game: publicGame(game), summary: getSummary(game) } };
 }

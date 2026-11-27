@@ -3,7 +3,7 @@ import { formatBalance } from "./ui.js";
 
 export default function GameTotals({ summary }) {
   const names = new Map([...summary.players, ...summary.inactivePlayers].map(({ id, name }) => [id, name]));
-  const leaders = [...summary.players, ...summary.inactivePlayers.filter(({ id }) =>
+  const leaders = summary.settlement?.ranking ?? [...summary.players, ...summary.inactivePlayers.filter(({ id }) =>
     summary.scoredPlayerIds?.includes(id) || summary.gamePayouts?.[id])]
     .sort((a, b) => (summary.totalsPoints[b.id] ?? 0) - (summary.totalsPoints[a.id] ?? 0));
   return (

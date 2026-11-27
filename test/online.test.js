@@ -294,8 +294,7 @@ test("four authenticated players rebid the same cards, recover seats, substitute
 
   cory.socket.close();
   await waitFor(() => host.view.seats[corySeat].online === false);
-  assert.equal((await game.command(arun, "play", { value: original[1][0] })).data.error,
-    "Player offline. Waiting for reconnect.");
+  assert.equal(arun.view.clock, null);
   const newBrowser = game.actor("Cory on another phone");
   await game.join(newBrowser);
   assert.deepEqual(newBrowser.view.hand, []);
@@ -312,7 +311,7 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   assert.equal((await game.command(cory, "play", { value: original[3][0] })).status, 403);
   host.socket.close();
   await waitFor(() => arun.view.seats[hostSeat].online === false);
-  assert.equal((await game.command(arun, "play", { value: original[1][0] })).status, 409);
+  assert.equal((await game.command(arun, "start")).status, 403);
   const recoveredHost = game.actor("Recovered host");
   const recovery = await game.request(`${game.path}/recover`, {
     player: { token: game.recovery }, body: { newToken: recoveredHost.token },
@@ -429,7 +428,7 @@ test("four authenticated players rebid the same cards, recover seats, substitute
   assert.equal(recoveredHost.view.hand.length, 13);
   const history = await game.request(`${game.ledger}/history`);
   assert.equal(history.data.currentGameId, "2");
-  assert.deepEqual(history.data.games.map((entry) => [entry.gameIndex, entry.settlementApplied]), [[1, true], [2, false]]);
+  assert.deepEqual(history.data.games.map((entry) => [entry.gameIndex, entry.settlementApplied]), [[1, false], [2, false]]);
   const archived = await game.request(`${game.ledger}/history/1`);
   assert.deepEqual(archived.data.ledger.game.roundData, completed.game.roundData);
   await game.apply(recoveredHost, "end");
@@ -504,7 +503,7 @@ test("watching an idle table does not keep it alive", { timeout: 30_000 }, async
   assert.ok([404, 410].includes(response.status));
 });
 
-test("configured timers pause for an offline player and make legal automatic bids and card plays", { timeout: 40_000 }, async (t) => {
+test("reserved offline seats can start, time out, reconnect and explicitly pause or resume", { timeout: 40_000 }, async (t) => {
   const worker = await localWorker();
   t.after(() => worker.dispose());
   await worker.start();
@@ -513,33 +512,99 @@ test("configured timers pause for an offline player and make legal automatic bid
   await game.setup({ bidSeconds: 3, playSeconds: 3, weights: [10, 20, 30], stake: 2, minimumBid: 10 });
   for (const guest of guests) await game.join(guest);
   await waitFor(() => host.view.seats.every((seat) => seat?.online));
+  guests[0].socket.close();
+  await waitFor(() => host.view.seats.some((seat) => !seat.online));
   await game.apply(host, "start");
   assert.equal(host.view.clock.limitMs, 3000);
-  const expiry = host.view.expiresAt;
-  const pausedRevision = host.view.revision;
-  guests[0].socket.close();
-  await waitFor(() => host.view.clock?.deadline === null);
-  assert.ok(host.view.clock.remainingMs > 0);
-  await wait(3200);
-  assert.equal(host.view.revision, pausedRevision);
-  assert.equal(host.view.lastAuto, undefined);
-
   await guests[0].connect();
+  await game.apply(guests[0], "leave");
+  await waitFor(() => host.view.clock?.deadline === null);
+  const paused = host.view.revision;
+  await wait(3300);
+  assert.equal(host.view.revision, paused);
+  await game.apply(guests[0], "return");
   await waitFor(() => host.view.clock?.deadline != null);
-  await waitFor(() => host.view.lastAuto?.action === "bid", 8000);
+  const expiry = host.view.expiresAt;
+  const bidder = game.players.find((p) => p.view.seat === host.view.turn);
+  const observer = game.players.find((p) => p !== bidder);
+  bidder.socket.close();
+  await waitFor(() => observer.view.lastAuto?.action === "bid", 8000);
+  await bidder.connect();
+  await waitFor(() => host.view.lastAuto?.action === "bid");
   assert.ok(host.view.lastAuto.value >= 1 && host.view.lastAuto.value <= 4);
   assert.equal(host.view.expiresAt, expiry);
   const initialLedger = (await game.request(`${game.ledger}/snapshot`)).data.game;
   assert.equal(initialLedger.minimumBid, 10);
+  assert.deepEqual(initialLedger.pace, { bidSeconds: 3, playSeconds: 3 });
   assert.deepEqual(initialLedger.settlementConfig, { weights: [10, 20, 30], stake: 2 });
   await game.bidAll(game.players, [4, 3, 3]);
   const actor = game.players.find((player) => player.view.seat === host.view.turn);
   await waitFor(() => actor.view.legal.length > 0);
   const legal = actor.view.legal;
   const playingExpiry = host.view.expiresAt;
-  await waitFor(() => host.view.lastAuto?.action === "play", 8000);
-  assert.equal(host.view.lastAuto.seat, actor.view.seat);
-  assert.ok(legal.includes(host.view.lastAuto.value));
-  assert.equal(host.view.expiresAt, playingExpiry);
+  const watcher = game.players.find((player) => player !== actor);
+  actor.socket.close();
+  await waitFor(() => watcher.view.lastAuto?.action === "play", 8000);
+  assert.equal(watcher.view.lastAuto.seat, actor.view.seat);
+  assert.ok(legal.includes(watcher.view.lastAuto.value));
+  assert.equal(watcher.view.expiresAt, playingExpiry);
+  await actor.connect();
   await waitFor(() => actor.view.hand.length === 12);
+});
+
+test("a recurring group switches modes, keeps member IDs, confirms payments once, and restores its history", async (t) => {
+  const worker = await localWorker();
+  t.after(() => worker.dispose());
+  await worker.start();
+  const game = harness(t, worker.origin);
+  const [host, ...guests] = game.players;
+  await game.setup({ bidSeconds: 0, playSeconds: 0, weights: [10, 20, 30] });
+  for (const guest of guests) await game.join(guest);
+  await game.apply(host, "start");
+  const hostId = host.view.seats[host.view.seat].id;
+  await game.bidAll(game.players, [10, 1, 1, 1]);
+  await game.playDeal(game.players);
+  await game.apply(host, "end");
+  const snapshot = async () => (await game.request(game.ledger + "/snapshot")).data;
+  const command = (player, expectedRevision, action, payload = {}, key) =>
+    game.request(game.ledger + "/command", { player, key, body: { expectedRevision, action, payload } });
+  const side = await snapshot();
+  const players = side.game.players;
+  const config = { mode: "manual", players, hostId, dealerId: players[0].id,
+    settings: { bidSeconds: 0, playSeconds: 0, weights: [5, 10, 15], stake: 1 } };
+  assert.equal((await command(guests[0], side.revision, "mark-paid")).status, 403);
+  assert.equal((await command(host, side.revision, "group-next", config)).status, 200);
+  const manual = await snapshot();
+  assert.equal(manual.game.gameIndex, 2);
+  assert.deepEqual(manual.summary.payouts, side.summary.payouts);
+  assert.equal((await command(host, side.revision, "mark-paid")).status, 409);
+  const key = randomUUID();
+  assert.equal((await command(host, manual.revision, "mark-paid", {}, key)).status, 200);
+  assert.equal((await command(host, manual.revision, "mark-paid", {}, key)).data.replayed, true);
+  const paid = await snapshot();
+  assert.deepEqual(paid.summary.transfersDue, []);
+  assert.equal(paid.game.payments.length, 1);
+  assert.deepEqual(paid.game.payments[0].transfers, side.summary.transfersDue);
+  assert.equal((await command(host, paid.revision, "finish-group-game")).status, 200);
+  const closed = await snapshot();
+  const nextGame = { ...config, mode: "online" };
+  const wrongSeat = players.find((p) => p.id !== hostId).id;
+  assert.equal((await command(host, closed.revision, "group-next", { ...nextGame, hostId: wrongSeat })).status, 409);
+  const nextKey = randomUUID();
+  assert.equal((await command(host, closed.revision, "group-next", nextGame, nextKey)).status, 200);
+  assert.equal((await command(host, closed.revision, "group-next", nextGame, nextKey)).data.replayed, true);
+  await Promise.all(game.players.map((p) => p.connect()));
+  assert.equal(host.view.phase, "lobby");
+  assert.equal(host.view.seats.filter((s) => s.reserved).length, 4);
+  await game.apply(host, "start");
+  assert.equal(host.view.gameIndex, 3);
+  assert.equal(host.view.seats[host.view.seat].id, hostId);
+  assert.deepEqual(host.view.settings.weights, [5, 10, 15]);
+  const file = await game.request(game.path + "/export", { player: host });
+  const other = "/api/ledger/" + hex(16);
+  const restored = await game.request(other + "/setup", { player: host, body: { action: "restore",
+    expectedRevision: 0, recoveryKey: hex(32), payload: file.data } });
+  assert.equal(restored.status, 201);
+  const history = await game.request(other + "/history/2");
+  assert.deepEqual(history.data.ledger.game.payments, paid.game.payments);
 });

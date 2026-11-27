@@ -11,9 +11,10 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     const editor = await editorContext.newPage();
     const viewer = await viewerContext.newPage();
     await editor.goto(`${worker.origin}/ledger`);
+    await editor.getByLabel(/Auto-award rounds/).check();
     await editor.getByRole("button", { name: "Create Ledger" }).click();
     await expect(editor.getByText("Live sync: Online")).toBeVisible();
-    await expect(editor.getByText(/Expires .+ unless you save another edit/)).toBeVisible();
+    await expect(editor.getByText(/Expires .+ if paid up and inactive/)).toBeVisible();
     const shareLink = editor.url();
     expect(shareLink).toMatch(/\/ledger\/[a-f0-9]{32}$/);
     const recovery = await editor.getByLabel("Recovery code", { exact: true }).inputValue();
@@ -141,6 +142,7 @@ test("an editor must review live changes before resubmitting a stale draft", asy
     const first = await browser.newPage();
     const second = await browser.newPage();
     await first.goto(`${worker.origin}/ledger`);
+    await first.getByLabel(/Auto-award rounds/).check();
     await first.getByRole("button", { name: "Create Ledger" }).click();
     await first.getByText("Editor Access", { exact: true }).click();
     const token = await first.getByLabel("Private editor code").inputValue();
@@ -169,14 +171,54 @@ test("an editor must review live changes before resubmitting a stale draft", asy
       await firstRound.getByRole("button", { name: "Set Bids", exact: true }).click();
       await expect(secondRound.getByRole("heading", { name: "Side Game (High Bid)" })).toBeVisible();
     };
-    const stake = secondRound.getByPlaceholder("3", { exact: true });
+    const pool = secondRound.getByText("Side payout · 6 total");
     await openSideGame();
-    await stake.fill("11");
+    await expect(pool).toBeVisible();
     await firstRound.getByRole("button", { name: "Cancel & Edit Bids" }).click();
     await expect(secondRound.getByRole("heading", { name: "Side Game (High Bid)" })).toHaveCount(0);
     await openSideGame();
-    await expect(stake).toHaveValue("3");
+    await expect(pool).toBeVisible();
   } finally {
+    await worker.dispose();
+  }
+});
+
+test("group balances, a payment receipt and a new online lobby work on a phone", async ({ browser }) => {
+  const worker = await localWorker();
+  const phone = browser.browserType().name() === "webkit" ? "iPhone SE" : "Pixel 7";
+  const context = await browser.newContext(devices[phone]);
+  try {
+    await worker.start();
+    const page = await context.newPage();
+    await page.goto(worker.origin + "/ledger");
+    await page.getByRole("button", { name: "Create Ledger" }).tap();
+    const deal = page.getByRole("region", { name: "Round 1", exact: true });
+    for (const [i, value] of [10, 1, 1, 1].entries()) {
+      await deal.getByLabel("Bid for Player " + (i + 1)).fill(String(value));
+    }
+    await deal.getByRole("button", { name: "Set Bids", exact: true }).tap();
+    await expect(deal.getByText("Side payout · 12 total")).toBeVisible();
+    await deal.getByRole("button", { name: "Yes — Bidder Won" }).tap();
+    await page.getByRole("link", { name: "Group balances & games" }).tap();
+    await expect(page.getByText("Gets 12.0", { exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Settle up" }).tap();
+    await expect(page.getByText("Player 2 pays Player 1")).toBeVisible();
+    await page.getByRole("button", { name: "Confirm paid" }).tap();
+    await expect(page.getByText("Paid up", { exact: true })).toHaveCount(4);
+    await page.getByRole("button", { name: "History", exact: true }).tap();
+    await page.getByRole("button", { name: /Game 1/ }).tap();
+    await expect(page.getByRole("heading", { name: /^Paid ·/ })).toBeVisible();
+    await page.getByText("End current game", { exact: true }).tap();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "End this game" }).tap();
+    await page.getByText("Start a new game", { exact: true }).tap();
+    await page.getByRole("button", { name: "10 / 20 / 30" }).tap();
+    await page.getByRole("button", { name: "Create online game" }).tap();
+    await expect(page.getByRole("button", { name: "Start game" })).toBeDisabled();
+    await expect(page.getByText("10 / 20 / 30 × 1")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  } finally {
+    await context.close();
     await worker.dispose();
   }
 });

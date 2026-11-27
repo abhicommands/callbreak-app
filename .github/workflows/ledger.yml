@@ -68,7 +68,7 @@ jobs:
         run: |
           case "$TARGET" in
             preview) wrangler_env=preview; worker_name=callbreak-ledger-preview ;;
-            production) wrangler_env=""; worker_name=callbreak-ledger ;;
+            production) wrangler_env=""; worker_name=callbreak-app ;;
             *) echo "Unknown deployment target." >&2; exit 1 ;;
           esac
           if [[ -z "$CLOUDFLARE_ACCOUNT_ID" || -z "$CLOUDFLARE_API_TOKEN" ]]; then
