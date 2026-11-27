@@ -1,5 +1,7 @@
-import React, { useMemo, useState } from "react";
+import React, { useState } from "react";
 import { Card, btnStyle, lightBtnStyle, inputStyle } from "./ui.js";
+
+import SeatOrder from "../../../SeatOrder.jsx";
 
 export default function SeatingControls({
   players,
@@ -34,17 +36,6 @@ export default function SeatingControls({
     setSource({ players, dealerId: currentDealerId });
     resetDraft();
   }
-
-  const movePlayer = (index, delta) => {
-    const next = [...order];
-    const target = index + delta;
-    if (target < 0 || target >= next.length) return;
-    const [removed] = next.splice(index, 1);
-    next.splice(target, 0, removed);
-    setOrder(next);
-  };
-
-  const reorderOptions = useMemo(() => order || [], [order]);
 
   const onSave = async () => {
     if (!onSubmit) return;
@@ -90,49 +81,7 @@ export default function SeatingControls({
 
       {isEditing && isAdmin && (
         <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
-          {reorderOptions.map((player, index) => (
-            <div
-              key={player.id}
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: 8,
-                background: "var(--surface)",
-                padding: "8px 12px",
-                borderRadius: 10,
-                border: "1px solid var(--line)",
-              }}
-            >
-              <span style={{ width: 24, textAlign: "center" }}>{index + 1}</span>
-              <span style={{ flex: 1 }}>{player.name}</span>
-              <div style={{ display: "flex", gap: 6 }}>
-                <button
-                  style={{ ...lightBtnStyle, padding: "6px 10px" }}
-                  onClick={() => movePlayer(index, -1)}
-                  disabled={saving || index === 0}
-                >
-                  ↑
-                </button>
-                <button
-                  style={{ ...lightBtnStyle, padding: "6px 10px" }}
-                  onClick={() => movePlayer(index, 1)}
-                  disabled={saving || index === order.length - 1}
-                >
-                  ↓
-                </button>
-              </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <input
-                  type="radio"
-                  name="dealer"
-                  checked={dealerId === player.id}
-                  onChange={() => setDealerId(player.id)}
-                  disabled={saving}
-                />
-                Dealer
-              </label>
-            </div>
-          ))}
+          <SeatOrder players={order} onChange={setOrder} disabled={saving} />
 
           <div
             style={{

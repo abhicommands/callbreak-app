@@ -84,12 +84,12 @@ function MatchSeat({ player, position, mine, dealer, turn, clock, serverOffset, 
   const name = player?.name || "Open seat";
   const initials = player?.name.trim().split(/\s+/).slice(0, 2).map((word) => Array.from(word)[0]).join("") ?? "–";
   return (
-    <div className={`match-seat match-seat-${position}${turn ? " match-seat-turn" : ""}${!player?.online ? " match-seat-offline" : ""}`}
-      data-seat={position} aria-current={turn ? "true" : undefined} title={name}>
+    <div className={`match-seat match-seat-${position}${turn ? " match-seat-turn" : ""}${turn && !player?.online ? " match-seat-offline" : ""}`}
+      data-seat={position} data-online={Boolean(player?.online)} aria-current={turn ? "true" : undefined} title={name}>
       <div className="seat-avatar" aria-hidden="true">{initials}</div>
       <div className="seat-info">
         <div className="seat-name"><strong>{name}</strong>{dealer && <span className="dealer-chip" aria-label="Dealer">D</span>}</div>
-        <span>{mine ? "You" : ""}{mine && !player?.online ? " · " : ""}{!player?.online && (player ? "Offline" : "Waiting")}</span>
+        <span>{mine ? "You" : ""}{mine && turn && !player?.online ? " · " : ""}{turn && !player?.online && (player ? "Reconnecting" : "Waiting")}</span>
         {active && player && <span className="seat-tally" aria-label={`${player.wins} won, ${player.bid ?? "no"} bid`}>
           {player.wins}<span> / {player.bid ?? "–"}</span></span>}
       </div>
@@ -226,14 +226,14 @@ export default function MatchTable({ view, ready, connected, command, serverOffs
   const snapshot = view.scores;
   const felt = useRef(null);
   const [released, setReleased] = useState(0);
-  const { seat, turn, phase, hand, legal, round, trick, lastTrick, seats, previousBidTotal, lastAuto,
+  const { seat, turn, phase, hand, legal, round, trick, lastTrick, seats, previousBidTotal,
     penultimate, lastWinnerId, revealUntil, side } = view;
   const active = phase === "bidding" || phase === "playing";
   const seatsReady = seats.every((player) => player && player.reserved !== false);
   const [selection, setSelection] = useState(null);
   const selectedCard = selection?.turn === view.turnVersion && ready ? selection.card : null;
   const yourTurn = active && turn === seat;
-  const canAct = ready && seatsReady && yourTurn;
+  const canAct = ready && !view.pausedBy && !view.sleeping && !seats[turn]?.left && yourTurn;
   const position = (index) => seatPosition(index, seat);
   const trickNumber = seats.reduce((count, player) => count + (player?.wins ?? 0), 0);
   const offset = serverOffset ?? view.serverOffset ?? 0;
@@ -245,7 +245,8 @@ export default function MatchTable({ view, ready, connected, command, serverOffs
     return () => clearTimeout(timer);
   }, [offset, revealUntil, revealing]);
   const prompt = !connected ? "Reconnecting…" : !ready ? "Saving move…" : active
-    ? !seatsReady ? "A player left. Waiting for their seat to be restored."
+    ? view.sleeping ? "Waiting to resume" : view.pausedBy ? `Paused by ${view.pausedBy}`
+      : seats[turn]?.left ? `Waiting for ${seats[turn].name}’s seat`
       : yourTurn ? (phase === "bidding" ? "Your turn to bid" : "Your turn to play")
         : `${seats[turn]?.name} to ${phase === "bidding" ? "bid" : "play"}`
     : revealing ? "Final trick" : phase === "side-result" ? "Side game complete" : phase === "between" ? "Deal complete" : "Game complete";
@@ -265,6 +266,8 @@ export default function MatchTable({ view, ready, connected, command, serverOffs
               `Game ${view.gameIndex} · Deal ${round}/5${phase === "playing" ? " · Trick " + (trickNumber + 1) : ""}`}</span>
             <strong data-your-turn={canAct || undefined} role="status">{prompt}</strong>
           </div>
+          {active && view.host && !view.sleeping && <button className="online-secondary" disabled={!ready}
+            onClick={() => command(view.pausedBy ? "resume" : "pause")}>{view.pausedBy ? "Resume game" : "Pause game"}</button>}
           <div className="card-felt" ref={felt}>
             <div className="felt-mark" aria-hidden="true"><span>♠</span></div>
             <div className="felt-trick felt-current-trick" aria-label="Current trick">
@@ -289,8 +292,8 @@ export default function MatchTable({ view, ready, connected, command, serverOffs
           {(active && phase === "bidding" && previousBidTotal !== null) && (
             <p className="match-notice">Bids totaled {previousBidTotal}. Bid again with the same cards.</p>
           )}
-          {active && lastAuto && <p className="match-notice">{seats[lastAuto.seat]?.name} · {lastAuto.action === "bid" ?
-            `bid ${lastAuto.value} automatically` : "card played automatically"}</p>}
+          {view.autoNotice && <p className="match-notice" role="status">Your last automatic {view.autoNotice.action === "bid"
+            ? `bid was ${view.autoNotice.value}` : `card was ${view.autoNotice.value.slice(1)}${SUITS[view.autoNotice.value[0]][0]}`}.</p>}
         </section>
         {active && (
           <section className="match-hand" aria-label="Your hand">

@@ -97,14 +97,8 @@ export function useTable(tableId, token) {
       if (closed || terminal || opening || socket || !navigator.onLine) return;
       opening = true;
       try {
-        const info = await request(path, { token, signal: AbortSignal.timeout(5000) });
+        await request(path, { token, signal: AbortSignal.timeout(5000) });
         if (closed) return;
-        if (info.phase === "ended") {
-          view = info;
-          terminal = true;
-          update();
-          return;
-        }
         const url = new URL(`${path}/socket`, location.href);
         url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
         const nextSocket = new WebSocket(url, ["callbreak", token]);
@@ -138,8 +132,8 @@ export function useTable(tableId, token) {
           if (event.data === "pong") return;
           const next = JSON.parse(event.data);
           if ("presence" in next) {
-            if (view?.seats && view.revision === next.revision && view.seats.some((p, i) => p && p.online !== next.presence[i])) {
-              view = { ...view, seats: view.seats.map((p, i) => p && { ...p, online: next.presence[i] }) };
+            if (view?.seats && view.revision === next.revision && (view.canTakeHost !== next.canTakeHost || view.seats.some((p, i) => p && p.online !== next.presence[i]))) {
+              view = { ...view, canTakeHost: next.canTakeHost, seats: view.seats.map((p, i) => p && { ...p, online: next.presence[i] }) };
               update();
             }
             return;
@@ -170,9 +164,7 @@ export function useTable(tableId, token) {
           online = true;
           delay = 150;
           transport.current = move;
-          terminal = next.phase === "ended";
           update();
-          if (terminal) nextSocket.close();
         };
         nextSocket.onclose = (event) => {
           clearInterval(heartbeat);

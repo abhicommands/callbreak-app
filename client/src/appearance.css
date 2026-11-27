@@ -138,3 +138,8 @@ body { background: var(--bg); color: var(--ink); }
   .ledger-layout > * { min-width: 0; }
   .ledger-page table { table-layout: fixed; }
 }
+.seat-order { padding: 0; list-style: none; }
+.seat-order li { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.seat-order li > span { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.seat-order button { min-width: 44px; min-height: 44px; }
+.seat-order .drag-seat { cursor: grab; touch-action: none; user-select: none; }
