@@ -101,9 +101,13 @@ test("mobile editor and independent viewer follow the same ledger", async ({ bro
     await actual(4, [4, 3, 3, 3]);
 
     for (const page of [editor, viewer]) {
-      const horizontalOverflow = await page.evaluate(() =>
-        document.documentElement.scrollWidth > window.innerWidth);
-      expect(horizontalOverflow).toBe(false);
+      const layout = await page.evaluate(() => {
+        const overflow = [...document.querySelectorAll("body *")]
+          .filter((element) => element.getBoundingClientRect().right > window.innerWidth)
+          .map((element) => element.tagName + "." + element.className);
+        return { width: document.documentElement.scrollWidth, viewport: window.innerWidth, overflow };
+      });
+      expect(layout.width, layout.overflow.join(", ")).toBeLessThanOrEqual(layout.viewport);
     }
     await expect(editor.getByRole("heading", { name: "First-place tie" })).toBeVisible();
     await editor.getByRole("button", { name: "Keep tie and split winnings" }).click();

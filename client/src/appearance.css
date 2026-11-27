@@ -128,3 +128,11 @@ body { background: var(--bg); color: var(--ink); }
 .sync-state::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px; background: #bb833a; border-radius: 50%; }
 .sync-state[data-online]::before { background: #408b69; }
 #ledger-access { scroll-margin-top: 60px; }
+@media (max-width: 480px) {
+  .ledger-jumps { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); }
+  .ledger-jumps a { justify-content: center; padding-inline: 2px; }
+  .deal-strip a { min-width: 0; padding-inline: 2px; }
+  .ledger-page { overflow-wrap: anywhere; }
+  .ledger-layout > * { min-width: 0; }
+  .ledger-page table { table-layout: fixed; }
+}
