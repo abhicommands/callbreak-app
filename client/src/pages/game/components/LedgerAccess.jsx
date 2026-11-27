@@ -1,4 +1,5 @@
 import React, { useRef, useState } from "react";
+import CopyLinkButton from "../../../CopyLinkButton.jsx";
 import { ledgerPath, randomHex, recoveryStorageKey, request } from "../../../api.js";
 import { Card, btnStyle, inputStyle, lightBtnStyle } from "./ui.js";
 
@@ -70,10 +71,7 @@ export default function LedgerAccess({ seriesId, revision, editorKey, expiresAt,
   return (
     <Card>
       <div className="ledger-actions">
-        <button style={lightBtnStyle} onClick={() => run(async () => {
-          await navigator.clipboard.writeText(shareUrl);
-          setStatus("Viewer link copied.");
-        })}>Copy Viewer Link</button>
+        <CopyLinkButton url={shareUrl} style={lightBtnStyle}>Copy Viewer Link</CopyLinkButton>
         {editorKey && (
           <button style={lightBtnStyle} disabled={busy} onClick={exportLedger}>Export Ledger</button>
         )}

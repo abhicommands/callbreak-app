@@ -4,6 +4,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { ledgerPath, randomHex, request } from "../../api.js";
 import useExpandedTable from "./useExpandedTable.js";
 import MatchTable from "./MatchTable.jsx";
+import CopyLinkButton from "../../CopyLinkButton.jsx";
 import TieSettlement from "../game/components/TieSettlement.jsx";
 import { RulesSummary, SettingsFields } from "./TableSettings.jsx";
 import { hostKey, seatKey, tablePath, useTable } from "./useTable.js";
@@ -146,6 +147,7 @@ function Room({ tableId }) {
   const seated = view?.seat >= 0;
   const inGame = view?.round > 0 && seated;
   const roomRef = useRef(null);
+  const inviteInput = useRef(null);
   const { active: fullscreen, toggle: toggleFullscreen } = useExpandedTable(inGame, roomRef);
   const member = seated || view?.host;
   useEffect(() => {
@@ -214,14 +216,7 @@ function Room({ tableId }) {
     });
   }
 
-  async function copyInvite() {
-    try {
-      await navigator.clipboard.writeText(new URL(`/play/${tableId}`, location.href).href);
-      setNotice("Table link copied.");
-    } catch {
-      setNotice("Copy the invite link below.");
-    }
-  }
+  const inviteUrl = new URL(`/play/${tableId}`, location.href).href;
 
   function backup() {
     submit(async () => {
@@ -287,10 +282,11 @@ function Room({ tableId }) {
           {view.phase === "lobby" && view.host && (
             <section className="online-panel">
               <h2>{view.seats.filter((player) => player?.reserved).length} of 4 seats reserved</h2>
-              <label>Invite link<input readOnly value={new URL(`/play/${tableId}`, location.href).href}
+              <label>Invite link<input ref={inviteInput} readOnly value={inviteUrl}
                 onFocus={(event) => event.target.select()} /></label>
               <div className="online-actions">
-                <button className="online-secondary" onClick={copyInvite}>Copy invite link</button>
+                <CopyLinkButton url={inviteUrl} className="online-secondary"
+                  selectLink={() => { inviteInput.current?.focus(); inviteInput.current?.select(); }}>Copy invite link</CopyLinkButton>
                 <button disabled={!ready || !view.seats.every((player) => player && player.reserved !== false)}
                   onClick={() => command("start")}>Start game</button>
               </div>
