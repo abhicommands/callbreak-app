@@ -373,7 +373,7 @@
 }
 
 @media (max-width: 600px) {
-  .online-in-game .online-header { display:grid; grid-template-columns:1fr auto auto; gap:0 16px; }
+  .online-in-game .online-header { display:grid; grid-template-columns:1fr auto; gap:0 16px; }
   .online-in-game .online-header h1 { grid-column:1 / -1; grid-row:1; text-align:left; }
   .match-hand { padding:10px 12px 15px; background:#142237; border-top:1px solid #40516b; }
   .match-cards { gap:6px 4px; }

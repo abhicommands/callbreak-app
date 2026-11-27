@@ -9,7 +9,7 @@ export default function useGameSubscription(seriesId) {
     if (next?.version !== 1 || next.game?.seriesId !== seriesId) return;
     setSnapshot((current) =>
       !current || next.revision > current.revision ||
-      (next.revision === current.revision && next.expiresAt !== current.expiresAt) ? next : current);
+      (next.revision === current.revision && (next.expiresAt !== current.expiresAt || next.tableEnded !== current.tableEnded)) ? next : current);
     setError("");
   }, [seriesId]);
 

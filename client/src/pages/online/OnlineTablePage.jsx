@@ -153,7 +153,7 @@ function Room({ tableId }) {
     if (view || !error?.includes("Table not found")) return;
     let active = true;
     request(ledgerPath(tableId) + "/snapshot").then(() => {
-      if (active) navigate("/group/" + tableId, { replace: true });
+      if (active) navigate("/ledger/" + tableId, { replace: true });
     }).catch(() => {});
     return () => { active = false; };
   }, [error, navigate, tableId, view]);
@@ -232,7 +232,6 @@ function Room({ tableId }) {
       <header className="online-header">
         <Link to="/play">{inGame ? "‹ Lobby" : "Online Callbreak"}</Link>
         {inGame && <h1>{view.name}</h1>}
-        {view && <Link to={`/group/${tableId}`}>Group</Link>}
         {view?.hasLedger && <Link to={`/ledger/${tableId}`} target={inGame ? "_blank" : undefined}
           rel={inGame ? "noopener" : undefined}>Open ledger</Link>}
       </header>

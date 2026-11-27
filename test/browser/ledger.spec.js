@@ -183,7 +183,7 @@ test("an editor must review live changes before resubmitting a stale draft", asy
   }
 });
 
-test("group balances, a payment receipt and a new online lobby work on a phone", async ({ browser }) => {
+test("the regular ledger handles payments and the next game, and old bookmarks still work", async ({ browser }) => {
   const worker = await localWorker();
   const phone = browser.browserType().name() === "webkit" ? "iPhone SE" : "Pixel 7";
   const context = await browser.newContext(devices[phone]);
@@ -199,23 +199,32 @@ test("group balances, a payment receipt and a new online lobby work on a phone",
     await deal.getByRole("button", { name: "Set Bids", exact: true }).tap();
     await expect(deal.getByText("Side payout · 12 total")).toBeVisible();
     await deal.getByRole("button", { name: "Yes — Bidder Won" }).tap();
-    await page.getByRole("link", { name: "Group balances & games" }).tap();
-    await expect(page.getByText("Gets 12.0", { exact: true })).toBeVisible();
+    const ledgerUrl = page.url();
+    await page.goto(ledgerUrl.replace("/ledger/", "/group/"));
+    await expect(page).toHaveURL(ledgerUrl);
+    await page.getByRole("link", { name: "Balances", exact: true }).tap();
+    await expect(page.locator("#balances").getByRole("row").filter({ hasText: "Player 1" })).toContainText("12.0");
     await page.getByRole("button", { name: "Settle up" }).tap();
     await expect(page.getByText("Player 2 pays Player 1")).toBeVisible();
     await page.getByRole("button", { name: "Confirm paid" }).tap();
-    await expect(page.getByText("Paid up", { exact: true })).toHaveCount(4);
-    await page.getByRole("button", { name: "History", exact: true }).tap();
-    await page.getByRole("button", { name: /Game 1/ }).tap();
+    await expect(page.locator("#balances tbody b").filter({ hasText: /^0\.0$/ })).toHaveCount(4);
+    await page.getByText("Payment receipts (1)", { exact: true }).tap();
     await expect(page.getByRole("heading", { name: /^Paid ·/ })).toBeVisible();
     await page.getByText("End current game", { exact: true }).tap();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByRole("button", { name: "End this game" }).tap();
     await page.getByText("Start a new game", { exact: true }).tap();
+    await page.getByRole("radio", { name: "Online", exact: true }).check();
     await page.getByRole("button", { name: "10 / 20 / 30" }).tap();
     await page.getByRole("button", { name: "Create online game" }).tap();
     await expect(page.getByRole("button", { name: "Start game" })).toBeDisabled();
     await expect(page.getByText("10 / 20 / 30 × 1")).toBeVisible();
+    await page.getByRole("link", { name: "Open ledger" }).tap();
+    await expect(page.getByRole("heading", { name: "Online Callbreak Ledger" })).toBeVisible();
+    await page.getByText("Game history", { exact: true }).tap();
+    await page.getByLabel("Past game").selectOption("1");
+    await page.getByText("Payment receipts (1)", { exact: true }).tap();
+    await expect(page.getByText("Player 2 pays Player 1")).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   } finally {
     await context.close();

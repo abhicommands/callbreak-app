@@ -49,7 +49,8 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     await expect(host.getByText("10 / 20 / 30 × 1")).toBeVisible();
     await expect(host.getByRole("button", { name: "Start game" })).toBeDisabled();
     for (const [index, guest] of [first, second, third].entries()) {
-      await guest.goto(invite);
+      await guest.goto(index === 0 ? invite.replace("/play/", "/group/") : invite);
+      await expect(guest).toHaveURL(invite);
       await guest.getByLabel("Your name").fill(`Guest ${index + 1}`);
       await guest.getByRole("button", { name: "Join table" }).tap();
       await expect(guest.getByText("You · Online")).toBeVisible();
@@ -204,6 +205,7 @@ test("four mobile browsers see the same table, reconnect, tap or drag cards, and
     host.once("dialog", (dialog) => dialog.accept());
     await host.getByRole("button", { name: "End table" }).tap();
     await expect(first.getByText("This table has ended.", { exact: false })).toBeVisible();
+    await expect(ledger.getByText("Start a new game", { exact: true })).toBeVisible();
   } finally {
     await Promise.all(contexts.map((context) => context.close()));
     await worker.dispose();

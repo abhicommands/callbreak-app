@@ -104,7 +104,7 @@ export default function Home() {
 
       <section style={card}>
         <h2>Create Ledger</h2>
-        <p>Use the same group link for future games. Paid-up groups expire after seven inactive days.</p>
+        <p>Reuse the ledger link for future games. Paid-up ledgers expire after seven inactive days.</p>
 
         <label htmlFor="series-name" style={label}>Ledger name</label>
         <input

@@ -417,7 +417,7 @@ export function applyCommand(game, action, payload, at) {
   }
   if (action === "mark-paid") {
     const transfers = paymentTransfers(game.balanceUnits);
-    assert(transfers.length, 409, "The group is already paid up.");
+    assert(transfers.length, 409, "The ledger is already paid up.");
     (game.payments ??= []).push({ at, transfers });
     for (const id of Object.keys(game.balanceUnits)) game.balanceUnits[id] = 0;
     return game;

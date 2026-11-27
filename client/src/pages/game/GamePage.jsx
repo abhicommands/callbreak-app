@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { editorStorageKey, ledgerPath, request } from "../../api.js";
 import useGameSubscription from "./hooks/useGameSubscription.js";
 import PageWrap from "./components/PageWrap.jsx";
@@ -16,15 +16,19 @@ import GameSettingsPanel from "./components/GameSettingsPanel.jsx";
 import LedgerAccess from "./components/LedgerAccess.jsx";
 import TieSettlement from "./components/TieSettlement.jsx";
 import { OnlineLedger } from "../online/OnlineLedger.jsx";
+import LedgerControls from "./components/LedgerControls.jsx";
+import { tablePath } from "../online/useTable.js";
 import { btnStyle } from "./components/ui.js";
 
 const emptyRound = { bids: {}, actuals: {}, points: {} };
 
 export default function GamePage({ seriesId }) {
+  const navigate = useNavigate();
   const path = ledgerPath(seriesId);
   const { snapshot, error, connected, acceptSnapshot } = useGameSubscription(seriesId);
   const { game, summary, revision, expiresAt } = snapshot || {};
   const [editorKey, setEditorKey] = useState("");
+  const [hostId, setHostId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [actionError, setActionError] = useState("");
   const [showHistory, setShowHistory] = useState(false);
@@ -42,8 +46,8 @@ export default function GamePage({ seriesId }) {
     async function authorize() {
       for (const token of tokens) {
         try {
-          await request(path + "/editor", { token });
-          if (active) setEditorKey(token);
+          const access = await request(path + "/editor", { token });
+          if (active) { setEditorKey(token); setHostId(access.hostId); }
           return;
         } catch (err) {
           if (err.status !== 403) return;
@@ -61,6 +65,15 @@ export default function GamePage({ seriesId }) {
     if (token) request(path + "/visit", { token, body: {} }).catch(() => {});
   }, [path, seriesId]);
 
+  useEffect(() => {
+    if (game || !error?.includes("Ledger not found")) return;
+    let active = true;
+    request(tablePath(seriesId)).then((table) => {
+      if (active && !table.hasLedger) navigate("/play/" + seriesId, { replace: true });
+    }).catch(() => {});
+    return () => { active = false; };
+  }, [game, error, seriesId, navigate]);
+
   function storeEditor(token) {
     setEditorKey(token);
     if (token) localStorage.setItem(editorStorageKey(seriesId), token);
@@ -76,9 +89,9 @@ export default function GamePage({ seriesId }) {
     request(`${path}/history`).then((data) => {
       if (!active) return;
       setSeries(data);
-      const latest = data.games.filter((entry) => entry.settlementApplied).at(-1);
+      const latest = data.games.filter((entry) => ["Posted", "Ended", "Payout skipped"].includes(entry.status)).at(-1);
       setSelectedHistoryGameId(latest?.gameId || "");
-      setHistoryError(latest ? "" : "History is available after a game is settled.");
+      setHistoryError(latest ? "" : "Completed games appear here.");
     }).catch((err) => {
       if (active) setHistoryError(err.message);
     });
@@ -151,8 +164,11 @@ export default function GamePage({ seriesId }) {
   const nextDealer = game.roundInfo[latestRecorded + 1]?.dealerId;
   const canSubstitute = editable && game.canSubstitute;
 
+  const controls = <LedgerControls key={gameId} snapshot={snapshot} editorKey={editorKey} hostId={hostId}
+    busy={saving} command={command} />;
+
   if (game.mode === "online") {
-    return <OnlineLedger game={game} summary={summary} connected={connected} onlineTable={snapshot.onlineTable}>
+    return <OnlineLedger game={game} summary={summary} connected={connected} onlineTable={snapshot.onlineTable} controls={controls}>
       {editorKey && <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
         onEditor={storeEditor} onSnapshot={acceptSnapshot} />}
       {actionError && <ErrorBanner message={actionError} />}
@@ -163,7 +179,6 @@ export default function GamePage({ seriesId }) {
 
   return (
     <PageWrap>
-      <Link className="group-nav-link" to={`/group/${seriesId}`}>Group balances &amp; games</Link>
       <GameHeader
         gameId={game.gameIndex}
         title={game.name}
@@ -171,7 +186,10 @@ export default function GamePage({ seriesId }) {
         stake={game.settlementConfig.stake}
         connected={connected}
       />
-      {openRound && editable && <a className="group-nav-link" href={`#deal-${openRound}`}>Enter deal {openRound} ↓</a>}
+      <nav className="ledger-jumps" aria-label="Ledger sections">
+        {openRound && editable && <a href={`#deal-${openRound}`}>Enter deal {openRound} ↓</a>}
+        <a href="#balances">Balances</a>
+      </nav>
       <ErrorBanner message={error || actionError} />
       <LedgerAccess seriesId={seriesId} revision={revision} editorKey={editorKey} expiresAt={expiresAt}
         onEditor={storeEditor} onSnapshot={acceptSnapshot} />
@@ -203,7 +221,7 @@ export default function GamePage({ seriesId }) {
         <aside className="ledger-sidebar">
           <TotalPointsCard players={summary.players} totalsPoints={summary.totalsPoints}
             projectedPoints={summary.projectedPoints} />
-          <PayoutLeaderboard summary={summary} />
+          <section id="balances"><PayoutLeaderboard summary={summary}>{controls}</PayoutLeaderboard></section>
           <SettlementCard summary={summary} />
           <GameSettingsPanel autoAwardEnabled={game.settings.autoAwardEnabled}
             isAdmin={editable} saving={saving}
